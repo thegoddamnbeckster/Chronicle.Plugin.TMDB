@@ -1,0 +1,9 @@
+{
+  "plugin_id": "tmdb",
+  "name": "TMDB",
+  "version": "1.0.0",
+  "author": "Chronicle Contributors",
+  "description": "Fetches movie and TV metadata from The Movie Database (TMDB). Requires a free TMDB API key.",
+  "min_chronicle_version": "0.1.0",
+  "entry_type": "Chronicle.Plugin.TMDB.TmdbMetadataProvider"
+}
