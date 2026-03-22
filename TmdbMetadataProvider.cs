@@ -32,6 +32,15 @@ public sealed class TmdbMetadataProvider : IMetadataProvider
 
     public MediaTypeSupport[] GetSupportedMediaTypes() =>
     [
+        // Chronicle's DB uses "movies" (plural); "movie" is kept for any legacy records.
+        // Both map to the same TMDB /search/movie and /movie/{id} endpoints.
+        new MediaTypeSupport
+        {
+            MediaTypeName   = "movies",
+            DefaultPriority = 10,
+            SupportedFields = ["title", "overview", "year", "poster_url", "backdrop_url",
+                               "runtime_minutes", "genres", "cast", "directors", "rating"],
+        },
         new MediaTypeSupport
         {
             MediaTypeName   = "movie",
@@ -148,8 +157,9 @@ public sealed class TmdbMetadataProvider : IMetadataProvider
 
         return mediaType.ToLowerInvariant() switch
         {
-            "tv" => await SearchTvAsync(query, ct).ConfigureAwait(false),
-            _    => await SearchMovieAsync(query, ct).ConfigureAwait(false),   // default → movie
+            "tv"                => await SearchTvAsync(query, ct).ConfigureAwait(false),
+            "movie" or "movies" => await SearchMovieAsync(query, ct).ConfigureAwait(false),
+            _                   => await SearchMovieAsync(query, ct).ConfigureAwait(false),
         };
     }
 
