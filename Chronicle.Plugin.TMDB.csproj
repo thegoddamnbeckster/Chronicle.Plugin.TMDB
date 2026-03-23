@@ -25,6 +25,14 @@
     <PackageReference Include="System.Text.Json" Version="9.0.3" />
   </ItemGroup>
 
+  <PropertyGroup>
+    <InternalsVisibleTo>Chronicle.Plugin.TMDB.Tests</InternalsVisibleTo>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Remove="tests/**" />
+  </ItemGroup>
+
   <!-- Copy manifest.json to output directory so PluginHostService can read it -->
   <ItemGroup>
     <None Include="manifest.json">

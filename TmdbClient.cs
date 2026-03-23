@@ -33,10 +33,11 @@ internal sealed class TmdbClient
 
     // ── Movies ────────────────────────────────────────────────────────────────
 
-    public Task<TmdbSearchResponse<TmdbMovie>> SearchMoviesAsync(string query, CancellationToken ct = default)
+    public Task<TmdbSearchResponse<TmdbMovie>> SearchMoviesAsync(string query, int? year = null, CancellationToken ct = default)
     {
+        var yearParam = year.HasValue ? $"&primary_release_year={year}" : string.Empty;
         var url = $"{BaseUrl}/search/movie?api_key={_apiKey}&language={_language}" +
-                  $"&include_adult={_includeAdult.ToString().ToLower()}&query={Uri.EscapeDataString(query)}";
+                  $"&include_adult={_includeAdult.ToString().ToLower()}&query={Uri.EscapeDataString(query)}{yearParam}";
         return GetAsync<TmdbSearchResponse<TmdbMovie>>(url, ct);
     }
 
@@ -48,9 +49,10 @@ internal sealed class TmdbClient
 
     // ── TV Shows ─────────────────────────────────────────────────────────────
 
-    public Task<TmdbSearchResponse<TmdbTv>> SearchTvAsync(string query, CancellationToken ct = default)
+    public Task<TmdbSearchResponse<TmdbTv>> SearchTvAsync(string query, int? year = null, CancellationToken ct = default)
     {
-        var url = $"{BaseUrl}/search/tv?api_key={_apiKey}&language={_language}&query={Uri.EscapeDataString(query)}";
+        var yearParam = year.HasValue ? $"&first_air_date_year={year}" : string.Empty;
+        var url = $"{BaseUrl}/search/tv?api_key={_apiKey}&language={_language}&query={Uri.EscapeDataString(query)}{yearParam}";
         return GetAsync<TmdbSearchResponse<TmdbTv>>(url, ct);
     }
 

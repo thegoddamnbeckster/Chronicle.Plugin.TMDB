@@ -28,6 +28,18 @@ public sealed class TmdbMetadataProvider : IMetadataProvider
 
     private TmdbClient? _client;
 
+    /// <summary>Test-only constructor that injects a pre-built client.</summary>
+    internal TmdbMetadataProvider(TmdbClient client,
+        string posterSize = "w500", string backdropSize = "w1280")
+    {
+        _client       = client;
+        _posterSize   = posterSize;
+        _backdropSize = backdropSize;
+    }
+
+    /// <summary>Required for public instantiation by the host (no-arg).</summary>
+    public TmdbMetadataProvider() { }
+
     // ── IMetadataProvider: static declarations ────────────────────────────────
 
     public MediaTypeSupport[] GetSupportedMediaTypes() =>
@@ -163,25 +175,60 @@ public sealed class TmdbMetadataProvider : IMetadataProvider
         };
     }
 
+    // Matches a trailing " (YYYY)" or "(YYYY)" year suffix — common in file-scanner folder names.
+    private static readonly System.Text.RegularExpressions.Regex YearSuffixRe =
+        new(@"\s*\((\d{4})\)\s*$",
+            System.Text.RegularExpressions.RegexOptions.Compiled);
+
     private async Task<MediaMetadata> SearchMovieAsync(string query, CancellationToken ct)
     {
-        var resp = await _client!.SearchMoviesAsync(query, ct).ConfigureAwait(false);
+        // Strip "(YYYY)" suffix from folder-style names like "Groundhog Day (1993)" and
+        // pass the year as the TMDB primary_release_year filter for a precise match.
+        int? year = null;
+        var yearMatch = YearSuffixRe.Match(query);
+        if (yearMatch.Success)
+        {
+            year  = int.Parse(yearMatch.Groups[1].Value);
+            query = query[..yearMatch.Index].Trim();
+        }
+
+        var resp = await _client!.SearchMoviesAsync(query, year, ct).ConfigureAwait(false);
+        var results = resp.Results.Select(MapMovie).ToList();
+
+        // The enrichment service inspects the top-level ExternalId to decide whether a
+        // match was found.  Promote the best (first) result to the top level so it is
+        // available without the caller having to inspect the Results list.
+        var best = results.FirstOrDefault();
         return new MediaMetadata
         {
+            ExternalId   = best?.ExternalId,
             Source       = "tmdb",
             TotalResults = resp.TotalResults,
-            Results      = resp.Results.Select(MapMovie).ToList(),
+            Results      = results,
         };
     }
 
     private async Task<MediaMetadata> SearchTvAsync(string query, CancellationToken ct)
     {
-        var resp = await _client!.SearchTvAsync(query, ct).ConfigureAwait(false);
+        // Strip "(YYYY)" suffix (e.g. "Breaking Bad (2008)") and pass as first_air_date_year.
+        int? year = null;
+        var yearMatch = YearSuffixRe.Match(query);
+        if (yearMatch.Success)
+        {
+            year  = int.Parse(yearMatch.Groups[1].Value);
+            query = query[..yearMatch.Index].Trim();
+        }
+
+        var resp = await _client!.SearchTvAsync(query, year, ct).ConfigureAwait(false);
+        var results = resp.Results.Select(MapTv).ToList();
+
+        var best = results.FirstOrDefault();
         return new MediaMetadata
         {
+            ExternalId   = best?.ExternalId,
             Source       = "tmdb",
             TotalResults = resp.TotalResults,
-            Results      = resp.Results.Select(MapTv).ToList(),
+            Results      = results,
         };
     }
 
