@@ -62,6 +62,18 @@ internal sealed class TmdbClient
         return GetAsync<TmdbTv>(url, ct);
     }
 
+    public Task<TmdbSeason> GetTvSeasonAsync(string showId, string seasonNumber, CancellationToken ct = default)
+    {
+        var url = $"{BaseUrl}/tv/{showId}/season/{seasonNumber}?api_key={_apiKey}&language={_language}";
+        return GetAsync<TmdbSeason>(url, ct);
+    }
+
+    public Task<TmdbEpisode> GetTvEpisodeAsync(string showId, string seasonNumber, string episodeNumber, CancellationToken ct = default)
+    {
+        var url = $"{BaseUrl}/tv/{showId}/season/{seasonNumber}/episode/{episodeNumber}?api_key={_apiKey}&language={_language}";
+        return GetAsync<TmdbEpisode>(url, ct);
+    }
+
     // ── Images ────────────────────────────────────────────────────────────────
 
     /// <summary>Downloads raw image bytes from the TMDB image CDN.</summary>

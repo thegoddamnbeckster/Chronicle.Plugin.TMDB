@@ -41,6 +41,35 @@ internal record TmdbTv(
     [property: JsonPropertyName("credits")]         TmdbCredits?     Credits
 );
 
+// ── TV Season ─────────────────────────────────────────────────────────────────
+
+internal sealed class TmdbSeason
+{
+    [JsonPropertyName("id")]             public int Id { get; set; }
+    [JsonPropertyName("season_number")]  public int SeasonNumber { get; set; }
+    [JsonPropertyName("name")]           public string? Name { get; set; }
+    [JsonPropertyName("overview")]       public string? Overview { get; set; }
+    [JsonPropertyName("air_date")]       public string? AirDate { get; set; }
+    [JsonPropertyName("poster_path")]    public string? PosterPath { get; set; }
+    [JsonPropertyName("vote_average")]   public double VoteAverage { get; set; }
+    [JsonPropertyName("episodes")]       public List<TmdbEpisode>? Episodes { get; set; }
+}
+
+// ── TV Episode ────────────────────────────────────────────────────────────────
+
+internal sealed class TmdbEpisode
+{
+    [JsonPropertyName("id")]              public int Id { get; set; }
+    [JsonPropertyName("episode_number")]  public int EpisodeNumber { get; set; }
+    [JsonPropertyName("season_number")]   public int SeasonNumber { get; set; }
+    [JsonPropertyName("name")]            public string? Name { get; set; }
+    [JsonPropertyName("overview")]        public string? Overview { get; set; }
+    [JsonPropertyName("air_date")]        public string? AirDate { get; set; }
+    [JsonPropertyName("still_path")]      public string? StillPath { get; set; }
+    [JsonPropertyName("vote_average")]    public double VoteAverage { get; set; }
+    [JsonPropertyName("show_id")]         public int ShowId { get; set; }
+}
+
 // ── Shared sub-types ─────────────────────────────────────────────────────────
 
 internal record TmdbGenre(
