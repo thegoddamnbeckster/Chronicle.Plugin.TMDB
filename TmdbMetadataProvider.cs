@@ -242,6 +242,37 @@ public sealed class TmdbMetadataProvider : IMetadataProvider
     {
         EnsureConfigured();
 
+        // Normalize full TMDB URLs → typed IDs before processing.
+        // e.g. https://www.themoviedb.org/tv/127839-top-chef-amateurs?language=en-CA → tv:127839
+        //      https://www.themoviedb.org/movie/550-fight-club → movie:550
+        if (externalId.StartsWith("http", StringComparison.OrdinalIgnoreCase))
+            externalId = NormalizeTmdbUrl(externalId);
+
+        // Supported formats:
+        //   movie:{tmdbId}                        → /movie/{id}
+        //   tv:{tmdbId}                           → /tv/{id}
+        //   tv:{tmdbId}/season:{n}                → /tv/{id}/season/{n}
+        //   tv:{tmdbId}/season:{n}/episode:{m}    → /tv/{id}/season/{n}/episode/{m}
+        if (externalId.Contains("/season:", StringComparison.OrdinalIgnoreCase))
+        {
+            // Parse tv:{showId}/season:{n}[/episode:{m}]
+            var segments = externalId.Split('/');
+            var showId    = segments[0].Split(':', 2)[1];
+            var seasonNum = segments[1].Split(':', 2)[1];
+
+            if (segments.Length >= 3 && segments[2].StartsWith("episode:", StringComparison.OrdinalIgnoreCase))
+            {
+                var episodeNum = segments[2].Split(':', 2)[1];
+                var episode = await _client!.GetTvEpisodeAsync(showId, seasonNum, episodeNum, ct).ConfigureAwait(false);
+                return MapTvEpisode(episode, externalId);
+            }
+            else
+            {
+                var season = await _client!.GetTvSeasonAsync(showId, seasonNum, ct).ConfigureAwait(false);
+                return MapTvSeason(season, externalId);
+            }
+        }
+
         var parts = externalId.Split(':', 2);
         if (parts.Length != 2)
             throw new ArgumentException($"Invalid TMDB external ID format: '{externalId}'. Expected 'type:id'.");
@@ -305,8 +336,73 @@ public sealed class TmdbMetadataProvider : IMetadataProvider
         Directors       = [],   // TV uses Crew differently; simplified for now
     };
 
+    private static MediaMetadata MapTvSeason(TmdbSeason season, string externalId) => new()
+    {
+        ExternalId      = externalId,
+        Source          = "tmdb",
+        TotalResults    = 1,
+        Title           = season.Name ?? string.Empty,
+        Overview        = season.Overview,
+        Year            = ParseYear(season.AirDate),
+        PosterUrl       = season.PosterPath is not null
+                          ? $"https://image.tmdb.org/t/p/w500{season.PosterPath}"
+                          : null,
+        Rating          = season.VoteAverage,
+        ExtendedData    = System.Text.Json.JsonSerializer.SerializeToElement(new
+        {
+            seasonNumber = season.SeasonNumber,
+            tmdbId       = season.Id,
+            episodeCount = season.Episodes?.Count,
+        }),
+    };
+
+    private static MediaMetadata MapTvEpisode(TmdbEpisode episode, string externalId) => new()
+    {
+        ExternalId      = externalId,
+        Source          = "tmdb",
+        TotalResults    = 1,
+        Title           = episode.Name ?? string.Empty,
+        Overview        = episode.Overview,
+        Year            = ParseYear(episode.AirDate),
+        PosterUrl       = episode.StillPath is not null
+                          ? $"https://image.tmdb.org/t/p/w500{episode.StillPath}"
+                          : null,
+        Rating          = episode.VoteAverage,
+        ExtendedData    = System.Text.Json.JsonSerializer.SerializeToElement(new
+        {
+            episodeNumber = episode.EpisodeNumber,
+            seasonNumber  = episode.SeasonNumber,
+            tmdbId        = episode.Id,
+        }),
+    };
+
     private static int? ParseYear(string? date) =>
         date is { Length: >= 4 } && int.TryParse(date[..4], out var y) ? y : null;
+
+    /// <summary>
+    /// Converts a full TMDB URL to a typed external ID.
+    /// e.g. https://www.themoviedb.org/tv/127839-top-chef-amateurs?language=en-CA → tv:127839
+    ///      https://www.themoviedb.org/movie/550-fight-club                       → movie:550
+    /// </summary>
+    private static string NormalizeTmdbUrl(string url)
+    {
+        try
+        {
+            var uri = new Uri(url);
+            // Path looks like /tv/127839-some-slug or /movie/550-some-slug
+            var segments = uri.AbsolutePath.Trim('/').Split('/');
+            if (segments.Length >= 2)
+            {
+                var type = segments[0].ToLowerInvariant();   // "tv" or "movie"
+                // The segment may be "127839-some-slug" — extract the leading digits
+                var idPart = segments[1].Split('-')[0];
+                if (type is "tv" or "movie" && int.TryParse(idPart, out _))
+                    return $"{type}:{idPart}";
+            }
+        }
+        catch { /* fall through to let GetByIdAsync handle the malformed input */ }
+        return url;
+    }
 
     private void EnsureConfigured()
     {

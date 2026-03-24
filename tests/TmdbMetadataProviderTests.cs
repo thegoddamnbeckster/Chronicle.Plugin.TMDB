@@ -117,6 +117,33 @@ public class TmdbMetadataProviderTests
         Assert.Null(result.ExternalId);
     }
 
+    // ── GetByIdAsync: URL normalization ──────────────────────────────────────
+
+    [Theory]
+    [InlineData("https://www.themoviedb.org/tv/127839-top-chef-amateurs?language=en-CA", "tv:127839")]
+    [InlineData("https://www.themoviedb.org/tv/1399", "tv:1399")]
+    [InlineData("https://www.themoviedb.org/movie/550-fight-club", "movie:550")]
+    [InlineData("https://www.themoviedb.org/movie/550", "movie:550")]
+    public async Task GetByIdAsync_NormalizesTmdbUrls(string inputUrl, string expectedId)
+    {
+        string? capturedId = null;
+        var handler = new StubHandler(req =>
+        {
+            capturedId = req.RequestUri?.ToString();
+            return TvSearchResponse(127839, "Top Chef Amateurs");
+        });
+        var provider = BuildProvider(handler);
+
+        // We just care the URL is normalized — actual response doesn't matter for this test
+        try { await provider.GetByIdAsync(inputUrl); } catch { /* ignore mapping errors */ }
+
+        Assert.NotNull(capturedId);
+        var type = expectedId.Split(':')[0];
+        var id   = expectedId.Split(':')[1];
+        // Verify the HTTP call targeted the right endpoint (not the raw URL)
+        Assert.Contains($"/{type}/{id}", capturedId);
+    }
+
     // ── Helpers ───────────────────────────────────────────────────────────────
 
     private static TmdbMetadataProvider BuildProvider(StubHandler handler)
