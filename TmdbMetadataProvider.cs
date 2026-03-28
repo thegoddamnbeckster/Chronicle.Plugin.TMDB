@@ -162,75 +162,85 @@ public sealed class TmdbMetadataProvider : IMetadataProvider
 
     // ── IMetadataProvider: search ─────────────────────────────────────────────
 
-    public async Task<MediaMetadata> SearchAsync(string query, string mediaType,
-        CancellationToken ct = default)
-    {
-        EnsureConfigured();
-
-        return mediaType.ToLowerInvariant() switch
-        {
-            "tv"                => await SearchTvAsync(query, ct).ConfigureAwait(false),
-            "movie" or "movies" => await SearchMovieAsync(query, ct).ConfigureAwait(false),
-            _                   => await SearchMovieAsync(query, ct).ConfigureAwait(false),
-        };
-    }
-
     // Matches a trailing " (YYYY)" or "(YYYY)" year suffix — common in file-scanner folder names.
     private static readonly System.Text.RegularExpressions.Regex YearSuffixRe =
         new(@"\s*\((\d{4})\)\s*$",
             System.Text.RegularExpressions.RegexOptions.Compiled);
 
-    private async Task<MediaMetadata> SearchMovieAsync(string query, CancellationToken ct)
+    public async Task<IReadOnlyList<ScoredCandidate>> SearchAsync(
+        MediaSearchContext context, CancellationToken ct = default)
     {
-        // Strip "(YYYY)" suffix from folder-style names like "Groundhog Day (1993)" and
-        // pass the year as the TMDB primary_release_year filter for a precise match.
-        int? year = null;
-        var yearMatch = YearSuffixRe.Match(query);
+        EnsureConfigured();
+
+        // Always strip "(YYYY)" suffix from the search name — it degrades TMDB title matching.
+        // Use context.Year if provided (e.g. Fix Match path); fall back to the extracted year.
+        int? year = context.Year;
+        string name = context.Name;
+        var yearMatch = YearSuffixRe.Match(name);
         if (yearMatch.Success)
         {
-            year  = int.Parse(yearMatch.Groups[1].Value);
-            query = query[..yearMatch.Index].Trim();
+            year ??= int.Parse(yearMatch.Groups[1].Value);
+            name = name[..yearMatch.Index].Trim();
         }
 
-        var resp = await _client!.SearchMoviesAsync(query, year, ct).ConfigureAwait(false);
-        var results = resp.Results.Select(MapMovie).ToList();
+        // Search both movie and TV endpoints — scoring determines the winner
+        var candidates = new List<ScoredCandidate>();
 
-        // The enrichment service inspects the top-level ExternalId to decide whether a
-        // match was found.  Promote the best (first) result to the top level so it is
-        // available without the caller having to inspect the Results list.
-        var best = results.FirstOrDefault();
-        return new MediaMetadata
-        {
-            ExternalId   = best?.ExternalId,
-            Source       = "tmdb",
-            TotalResults = resp.TotalResults,
-            Results      = results,
-        };
+        var movieResp = await _client!.SearchMoviesAsync(name, year, ct).ConfigureAwait(false);
+        foreach (var m in movieResp.Results ?? [])
+            candidates.Add(ScoreCandidate(context, MapMovie(m)));
+
+        var tvResp = await _client!.SearchTvAsync(name, year, ct).ConfigureAwait(false);
+        foreach (var t in tvResp.Results ?? [])
+            candidates.Add(ScoreCandidate(context, MapTv(t)));
+
+        return candidates
+            .Where(c => c.Metadata.ExternalId is not null)
+            .OrderByDescending(c => c.Score)
+            .Take(10)
+            .ToList();
     }
 
-    private async Task<MediaMetadata> SearchTvAsync(string query, CancellationToken ct)
+    private static ScoredCandidate ScoreCandidate(MediaSearchContext ctx, MediaMetadata candidate)
     {
-        // Strip "(YYYY)" suffix (e.g. "Breaking Bad (2008)") and pass as first_air_date_year.
-        int? year = null;
-        var yearMatch = YearSuffixRe.Match(query);
-        if (yearMatch.Success)
+        int score = 0;
+        var reasons = new List<string>();
+
+        var cn = Normalize(candidate.Title ?? string.Empty);
+        var qn = Normalize(ctx.Name);
+
+        if (string.Equals(cn, qn, StringComparison.Ordinal))
         {
-            year  = int.Parse(yearMatch.Groups[1].Value);
-            query = query[..yearMatch.Index].Trim();
+            score += 60;
+            reasons.Add("title exact");
+        }
+        else if (cn.Contains(qn, StringComparison.Ordinal) || qn.Contains(cn, StringComparison.Ordinal))
+        {
+            score += 30;
+            reasons.Add("title contains");
         }
 
-        var resp = await _client!.SearchTvAsync(query, year, ct).ConfigureAwait(false);
-        var results = resp.Results.Select(MapTv).ToList();
-
-        var best = results.FirstOrDefault();
-        return new MediaMetadata
+        if (ctx.Year.HasValue && candidate.Year.HasValue)
         {
-            ExternalId   = best?.ExternalId,
-            Source       = "tmdb",
-            TotalResults = resp.TotalResults,
-            Results      = results,
-        };
+            if (ctx.Year.Value == candidate.Year.Value)
+            {
+                score += 20;
+                reasons.Add("year exact");
+            }
+            else if (Math.Abs(ctx.Year.Value - candidate.Year.Value) == 1)
+            {
+                score += 10;
+                reasons.Add("year ±1");
+            }
+        }
+
+        return new ScoredCandidate(candidate, score,
+            reasons.Count > 0 ? string.Join(", ", reasons) : "no signals");
     }
+
+    private static string Normalize(string s) =>
+        System.Text.RegularExpressions.Regex.Replace(s.Trim(), @"[:\-,\.']", " ")
+            .Replace("  ", " ").Trim().ToLowerInvariant();
 
     // ── IMetadataProvider: get by ID ──────────────────────────────────────────
 

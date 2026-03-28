@@ -1,120 +1,206 @@
 using System.Net;
 using System.Text;
 using Chronicle.Plugin.TMDB;
+using Chronicle.Plugins.Models;
 using Xunit;
 
 namespace Chronicle.Plugin.TMDB.Tests;
 
 /// <summary>
-/// Tests for TmdbMetadataProvider.SearchAsync — verifies that the best match is
-/// promoted to the top-level ExternalId (so the enrichment service can record it)
-/// and that year suffixes like "(1993)" are extracted from the title and passed as
-/// the TMDB primary_release_year / first_air_date_year parameter.
+/// Tests for TmdbMetadataProvider.SearchAsync — verifies that scored candidates are
+/// returned with correct ExternalIds and that year suffixes like "(1993)" are extracted
+/// from the title and passed as the TMDB primary_release_year / first_air_date_year parameter.
 /// </summary>
 public class TmdbMetadataProviderTests
 {
     // ── SearchAsync: movie ────────────────────────────────────────────────────
 
-    /// <summary>
-    /// The enrichment service checks result.ExternalId to decide whether a match
-    /// was found. Without promotion the container MediaMetadata has ExternalId=null
-    /// and every search is permanently marked NotFound.
-    /// </summary>
     [Fact]
-    public async Task SearchAsync_Movie_PromotesBestResultExternalIdToTopLevel()
+    public async Task SearchAsync_Movie_ReturnsScoredCandidateWithCorrectExternalId()
     {
-        var handler = new StubHandler(_ => MovieSearchResponse(550, "Fight Club"));
+        var handler = new StubHandler(req => req.RequestUri!.PathAndQuery.Contains("/search/movie")
+            ? MovieSearchResponse(550, "Fight Club")
+            : EmptySearchResponse());
         var provider = BuildProvider(handler);
 
-        var result = await provider.SearchAsync("Fight Club", "movies");
+        var results = await provider.SearchAsync(new MediaSearchContext("Fight Club"));
 
-        Assert.NotNull(result.ExternalId);
-        Assert.Equal("movie:550", result.ExternalId);
+        Assert.NotEmpty(results);
+        Assert.Equal("movie:550", results[0].Metadata.ExternalId);
     }
 
     [Fact]
-    public async Task SearchAsync_Movie_NoResults_ReturnsNullExternalId()
+    public async Task SearchAsync_Movie_NoResults_ReturnsEmptyList()
     {
         var handler = new StubHandler(_ => EmptySearchResponse());
         var provider = BuildProvider(handler);
 
-        var result = await provider.SearchAsync("ZZZZZ_NONEXISTENT", "movies");
+        var results = await provider.SearchAsync(new MediaSearchContext("ZZZZZ_NONEXISTENT"));
 
-        Assert.Null(result.ExternalId);
+        Assert.Empty(results);
     }
 
     [Fact]
     public async Task SearchAsync_Movie_WithYearSuffix_StripsYearFromTitle()
     {
-        string? capturedUrl = null;
+        string? capturedMovieUrl = null;
         var handler = new StubHandler(req =>
         {
-            capturedUrl = req.RequestUri?.ToString();
-            return MovieSearchResponse(12101, "Groundhog Day");
+            if (req.RequestUri!.PathAndQuery.Contains("/search/movie"))
+            {
+                capturedMovieUrl = req.RequestUri.ToString();
+                return MovieSearchResponse(12101, "Groundhog Day");
+            }
+            return EmptySearchResponse();
         });
         var provider = BuildProvider(handler);
 
-        await provider.SearchAsync("Groundhog Day (1993)", "movies");
+        await provider.SearchAsync(new MediaSearchContext("Groundhog Day (1993)"));
 
-        Assert.NotNull(capturedUrl);
+        Assert.NotNull(capturedMovieUrl);
         // Title must NOT contain the year suffix
-        Assert.DoesNotContain("1993", Uri.UnescapeDataString(capturedUrl!.Split("query=")[1].Split("&")[0]));
+        Assert.DoesNotContain("1993", Uri.UnescapeDataString(capturedMovieUrl!.Split("query=")[1].Split("&")[0]));
         // Year must appear as the primary_release_year parameter
-        Assert.Contains("primary_release_year=1993", capturedUrl);
+        Assert.Contains("primary_release_year=1993", capturedMovieUrl);
     }
 
     [Fact]
     public async Task SearchAsync_Movie_WithYearSuffix_ReturnsCorrectExternalId()
     {
-        var handler = new StubHandler(_ => MovieSearchResponse(12101, "Groundhog Day"));
+        var handler = new StubHandler(req => req.RequestUri!.PathAndQuery.Contains("/search/movie")
+            ? MovieSearchResponse(12101, "Groundhog Day")
+            : EmptySearchResponse());
         var provider = BuildProvider(handler);
 
-        var result = await provider.SearchAsync("Groundhog Day (1993)", "movies");
+        var results = await provider.SearchAsync(new MediaSearchContext("Groundhog Day (1993)"));
 
-        Assert.Equal("movie:12101", result.ExternalId);
+        Assert.NotEmpty(results);
+        Assert.Equal("movie:12101", results[0].Metadata.ExternalId);
+    }
+
+    [Fact]
+    public async Task SearchAsync_Movie_WithContextYear_SufixStillStrippedFromTitle()
+    {
+        string? capturedMovieUrl = null;
+        var handler = new StubHandler(req =>
+        {
+            if (req.RequestUri!.PathAndQuery.Contains("/search/movie"))
+            {
+                capturedMovieUrl = req.RequestUri.ToString();
+                return MovieSearchResponse(12101, "Groundhog Day");
+            }
+            return EmptySearchResponse();
+        });
+        var provider = BuildProvider(handler);
+
+        // Year provided via context AND in suffix — suffix is still stripped from the title
+        await provider.SearchAsync(new MediaSearchContext("Groundhog Day (1993)", Year: 1993));
+
+        Assert.NotNull(capturedMovieUrl);
+        Assert.Contains("primary_release_year=1993", capturedMovieUrl);
+        // "(1993)" must NOT appear in the query= segment
+        Assert.DoesNotContain("1993", Uri.UnescapeDataString(capturedMovieUrl!.Split("query=")[1].Split("&")[0]));
     }
 
     // ── SearchAsync: TV ───────────────────────────────────────────────────────
 
     [Fact]
-    public async Task SearchAsync_Tv_PromotesBestResultExternalIdToTopLevel()
+    public async Task SearchAsync_Tv_ReturnsScoredCandidateWithCorrectExternalId()
     {
-        var handler = new StubHandler(_ => TvSearchResponse(1399, "Game of Thrones"));
+        var handler = new StubHandler(req => req.RequestUri!.PathAndQuery.Contains("/search/tv")
+            ? TvSearchResponse(1399, "Game of Thrones")
+            : EmptySearchResponse());
         var provider = BuildProvider(handler);
 
-        var result = await provider.SearchAsync("Game of Thrones", "tv");
+        var results = await provider.SearchAsync(new MediaSearchContext("Game of Thrones"));
 
-        Assert.NotNull(result.ExternalId);
-        Assert.Equal("tv:1399", result.ExternalId);
+        Assert.NotEmpty(results);
+        Assert.Equal("tv:1399", results[0].Metadata.ExternalId);
     }
 
     [Fact]
     public async Task SearchAsync_Tv_WithYearSuffix_StripsYearAndPassesParameter()
     {
-        string? capturedUrl = null;
+        string? capturedTvUrl = null;
         var handler = new StubHandler(req =>
         {
-            capturedUrl = req.RequestUri?.ToString();
-            return TvSearchResponse(1396, "Breaking Bad");
+            if (req.RequestUri!.PathAndQuery.Contains("/search/tv"))
+            {
+                capturedTvUrl = req.RequestUri.ToString();
+                return TvSearchResponse(1396, "Breaking Bad");
+            }
+            return EmptySearchResponse();
         });
         var provider = BuildProvider(handler);
 
-        await provider.SearchAsync("Breaking Bad (2008)", "tv");
+        await provider.SearchAsync(new MediaSearchContext("Breaking Bad (2008)"));
 
-        Assert.NotNull(capturedUrl);
-        Assert.DoesNotContain("2008", Uri.UnescapeDataString(capturedUrl!.Split("query=")[1].Split("&")[0]));
-        Assert.Contains("first_air_date_year=2008", capturedUrl);
+        Assert.NotNull(capturedTvUrl);
+        Assert.DoesNotContain("2008", Uri.UnescapeDataString(capturedTvUrl!.Split("query=")[1].Split("&")[0]));
+        Assert.Contains("first_air_date_year=2008", capturedTvUrl);
     }
 
     [Fact]
-    public async Task SearchAsync_Tv_NoResults_ReturnsNullExternalId()
+    public async Task SearchAsync_Tv_NoResults_ReturnsEmptyList()
     {
         var handler = new StubHandler(_ => EmptySearchResponse());
         var provider = BuildProvider(handler);
 
-        var result = await provider.SearchAsync("ZZZZZ_NONEXISTENT", "tv");
+        var results = await provider.SearchAsync(new MediaSearchContext("ZZZZZ_NONEXISTENT"));
 
-        Assert.Null(result.ExternalId);
+        Assert.Empty(results);
+    }
+
+    // ── SearchAsync: scoring ─────────────────────────────────────────────────
+
+    [Fact]
+    public async Task SearchAsync_ExactTitleMatch_ScoresHigherThanContainsMatch()
+    {
+        // Movie results: exact match (id=1) + partial match (id=2)
+        var handler = new StubHandler(req => req.RequestUri!.PathAndQuery.Contains("/search/movie")
+            ? Json("""
+                {
+                    "results": [
+                        { "id": 2, "title": "The Fight Club Chronicles", "release_date": "2000-01-01",
+                          "overview": "", "poster_path": null, "backdrop_path": null },
+                        { "id": 1, "title": "Fight Club", "release_date": "1999-10-15",
+                          "overview": "", "poster_path": null, "backdrop_path": null }
+                    ],
+                    "total_results": 2, "total_pages": 1, "page": 1
+                }
+                """)
+            : EmptySearchResponse());
+        var provider = BuildProvider(handler);
+
+        var results = await provider.SearchAsync(new MediaSearchContext("Fight Club"));
+
+        Assert.NotEmpty(results);
+        Assert.Equal("movie:1", results[0].Metadata.ExternalId);   // exact match wins
+    }
+
+    [Fact]
+    public async Task SearchAsync_YearMatch_BoostsScore()
+    {
+        // Two identical-title TV results differing only in year
+        var handler = new StubHandler(req => req.RequestUri!.PathAndQuery.Contains("/search/tv")
+            ? Json("""
+                {
+                    "results": [
+                        { "id": 100, "name": "Flash", "first_air_date": "1990-01-01",
+                          "overview": "", "poster_path": null, "backdrop_path": null },
+                        { "id": 200, "name": "Flash", "first_air_date": "2014-01-01",
+                          "overview": "", "poster_path": null, "backdrop_path": null }
+                    ],
+                    "total_results": 2, "total_pages": 1, "page": 1
+                }
+                """)
+            : EmptySearchResponse());
+        var provider = BuildProvider(handler);
+
+        var results = await provider.SearchAsync(new MediaSearchContext("Flash", Year: 2014));
+
+        Assert.NotEmpty(results);
+        Assert.Equal("tv:200", results[0].Metadata.ExternalId);    // year 2014 matches
     }
 
     // ── GetByIdAsync: URL normalization ──────────────────────────────────────
