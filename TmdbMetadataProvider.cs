@@ -234,6 +234,17 @@ public sealed class TmdbMetadataProvider : IMetadataProvider
             }
         }
 
+        // Popularity tiebreaker: when title and year scores are equal, prefer more well-known
+        // results.  Adds 0–10 points based on vote_average so "What If...?" (8.4/10, Marvel)
+        // beats "What If" (4.0/10, obscure short) even though both are named "What If" from 2021.
+        // Capped at 10 so it cannot override a title or year signal.
+        if (candidate.Rating is > 0)
+        {
+            var boost = (int)Math.Min(Math.Round(candidate.Rating.Value), 10.0);
+            score += boost;
+            reasons.Add($"rating boost +{boost}");
+        }
+
         return new ScoredCandidate(candidate, score,
             reasons.Count > 0 ? string.Join(", ", reasons) : "no signals");
     }
