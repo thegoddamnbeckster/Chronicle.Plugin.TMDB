@@ -22,6 +22,7 @@ internal record TmdbMovie(
     [property: JsonPropertyName("backdrop_path")]  string?   BackdropPath,
     [property: JsonPropertyName("runtime")]        int?      Runtime,
     [property: JsonPropertyName("vote_average")]   double?   VoteAverage,
+    [property: JsonPropertyName("popularity")]     double?   Popularity,
     [property: JsonPropertyName("genres")]         List<TmdbGenre>? Genres,
     [property: JsonPropertyName("credits")]        TmdbCredits?     Credits
 );
@@ -29,16 +30,18 @@ internal record TmdbMovie(
 // ── TV show ───────────────────────────────────────────────────────────────────
 
 internal record TmdbTv(
-    [property: JsonPropertyName("id")]              int       Id,
-    [property: JsonPropertyName("name")]            string    Name,
-    [property: JsonPropertyName("overview")]        string?   Overview,
-    [property: JsonPropertyName("first_air_date")]  string?   FirstAirDate,
-    [property: JsonPropertyName("poster_path")]     string?   PosterPath,
-    [property: JsonPropertyName("backdrop_path")]   string?   BackdropPath,
+    [property: JsonPropertyName("id")]               int       Id,
+    [property: JsonPropertyName("name")]             string    Name,
+    [property: JsonPropertyName("overview")]         string?   Overview,
+    [property: JsonPropertyName("first_air_date")]   string?   FirstAirDate,
+    [property: JsonPropertyName("poster_path")]      string?   PosterPath,
+    [property: JsonPropertyName("backdrop_path")]    string?   BackdropPath,
     [property: JsonPropertyName("episode_run_time")] List<int>? EpisodeRunTime,
-    [property: JsonPropertyName("vote_average")]    double?   VoteAverage,
-    [property: JsonPropertyName("genres")]          List<TmdbGenre>? Genres,
-    [property: JsonPropertyName("credits")]         TmdbCredits?     Credits
+    [property: JsonPropertyName("vote_average")]     double?   VoteAverage,
+    [property: JsonPropertyName("popularity")]       double?   Popularity,
+    [property: JsonPropertyName("number_of_seasons")] int?    NumberOfSeasons,
+    [property: JsonPropertyName("genres")]           List<TmdbGenre>? Genres,
+    [property: JsonPropertyName("credits")]          TmdbCredits?     Credits
 );
 
 // ── TV Season ─────────────────────────────────────────────────────────────────

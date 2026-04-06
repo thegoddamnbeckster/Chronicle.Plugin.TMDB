@@ -151,6 +151,82 @@ public class TmdbMetadataProviderTests
         Assert.Empty(results);
     }
 
+    // ── SearchAsync: AltTitles cascade ────────────────────────────────────────
+
+    [Fact]
+    public async Task SearchAsync_UsesAltTitles_TriesEachTitle()
+    {
+        // Name returns empty; the FilenameStem alt-title should be tried and succeed.
+        var titlesSearched = new List<string>();
+        var handler = new StubHandler(req =>
+        {
+            if (req.RequestUri!.PathAndQuery.Contains("/search/movie"))
+            {
+                var query = Uri.UnescapeDataString(
+                    req.RequestUri.Query.Split("query=")[1].Split("&")[0]);
+                titlesSearched.Add(query);
+                // Return a hit only for the stem title
+                return query == "Fight Club"
+                    ? MovieSearchResponse(550, "Fight Club")
+                    : EmptySearchResponse();
+            }
+            return EmptySearchResponse();
+        });
+        var provider = BuildProvider(handler);
+
+        // Name has no results; FilenameStem "Fight Club" is the second alt-title
+        var ctx = new MediaSearchContext(
+            Name: "Fight Club (Director's Cut)",
+            AltTitles: ["Fight Club (Director's Cut)", "Fight Club"]);
+
+        var results = await provider.SearchAsync(ctx);
+
+        Assert.NotEmpty(results);
+        Assert.Equal("movie:550", results[0].Metadata.ExternalId);
+        // Both alt-titles must have been tried (exact equality — not a substring check)
+        Assert.Contains(titlesSearched, t => t == "Fight Club (Director's Cut)");
+        Assert.Contains(titlesSearched, t => t == "Fight Club");
+    }
+
+    [Fact]
+    public async Task SearchAsync_Stage1b_DropsYear_WhenNoHighScoreInStage1a()
+    {
+        // Stage 1a returns a low-score result; Stage 1b should retry without year.
+        var yearlessRequests = new List<string>();
+        var handler = new StubHandler(req =>
+        {
+            var path = req.RequestUri!.PathAndQuery;
+            if (path.Contains("/search/movie"))
+            {
+                // Track requests that have NO primary_release_year
+                if (!path.Contains("primary_release_year"))
+                    yearlessRequests.Add(path);
+
+                // Low-confidence result: title mismatch → score < 60
+                return Json("""
+                    {
+                        "results": [{ "id": 99, "title": "Something Else Entirely",
+                                      "release_date": "2010-01-01",
+                                      "overview": "", "poster_path": null, "backdrop_path": null }],
+                        "total_results": 1, "total_pages": 1, "page": 1
+                    }
+                    """);
+            }
+            return EmptySearchResponse();
+        });
+        var provider = BuildProvider(handler);
+
+        var ctx = new MediaSearchContext(
+            Name: "MyTitle",
+            Year: 2010,
+            AltTitles: ["MyTitle"]);
+
+        await provider.SearchAsync(ctx);
+
+        // Stage 1b must have fired a request without the year parameter
+        Assert.NotEmpty(yearlessRequests);
+    }
+
     // ── SearchAsync: scoring ─────────────────────────────────────────────────
 
     [Fact]
@@ -201,6 +277,35 @@ public class TmdbMetadataProviderTests
 
         Assert.NotEmpty(results);
         Assert.Equal("tv:200", results[0].Metadata.ExternalId);    // year 2014 matches
+    }
+
+    [Fact]
+    public async Task ScoreCandidate_YearMismatch_AppliesPenalty()
+    {
+        // Two movies: id=1 has title+year exact, id=2 has title exact but year off by 3.
+        // id=2 should score lower due to the -10 year-mismatch penalty.
+        var handler = new StubHandler(req => req.RequestUri!.PathAndQuery.Contains("/search/movie")
+            ? Json("""
+                {
+                    "results": [
+                        { "id": 1, "title": "Duplicate Title", "release_date": "2010-01-01",
+                          "overview": "", "poster_path": null, "backdrop_path": null },
+                        { "id": 2, "title": "Duplicate Title", "release_date": "2000-01-01",
+                          "overview": "", "poster_path": null, "backdrop_path": null }
+                    ],
+                    "total_results": 2, "total_pages": 1, "page": 1
+                }
+                """)
+            : EmptySearchResponse());
+        var provider = BuildProvider(handler);
+
+        // Context year = 2010; id=1 matches exactly (+20), id=2 is off by 10 years (-10)
+        var results = await provider.SearchAsync(new MediaSearchContext("Duplicate Title", Year: 2010));
+
+        Assert.NotEmpty(results);
+        Assert.Equal("movie:1", results[0].Metadata.ExternalId);  // year-mismatch-penalised id=2 loses
+        // id=2 must be present but ranked lower
+        Assert.True(results[0].Score > results.First(r => r.Metadata.ExternalId == "movie:2").Score);
     }
 
     // ── GetByIdAsync: URL normalization ──────────────────────────────────────

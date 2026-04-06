@@ -167,38 +167,110 @@ public sealed class TmdbMetadataProvider : IMetadataProvider
         new(@"\s*\((\d{4})\)\s*$",
             System.Text.RegularExpressions.RegexOptions.Compiled);
 
+    /// <summary>Minimum score for a Stage 1a result to short-circuit Stage 1b (year-less search).</summary>
+    private const int ExactMatchThreshold = 60;
+
     public async Task<IReadOnlyList<ScoredCandidate>> SearchAsync(
         MediaSearchContext context, CancellationToken ct = default)
     {
         EnsureConfigured();
 
-        // Always strip "(YYYY)" suffix from the search name — it degrades TMDB title matching.
-        // Use context.Year if provided (e.g. Fix Match path); fall back to the extracted year.
-        int? year = context.Year;
-        string name = context.Name;
-        var yearMatch = YearSuffixRe.Match(name);
-        if (yearMatch.Success)
+        // Build the ordered list of titles to try.  AltTitles already contains the
+        // year-stripped name, filename stem, and qualifier-stripped forms in order.
+        // Fall back to [context.Name] when none were provided.
+        // Deduplicate to avoid firing the same TMDB query twice (e.g. when Name and
+        // AltTitles[0] are identical after the enrichment service builds alt-title variants).
+        var titlesToTry = (context.AltTitles is { Count: > 0 }
+            ? context.AltTitles
+            : (IEnumerable<string>)[context.Name])
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        // Stage 1a — each AltTitle WITH year (allows early exit at ExactMatchThreshold).
+        var stage1aCandidates = new List<ScoredCandidate>();
+        bool foundHighScore = false;
+
+        foreach (var rawTitle in titlesToTry)
         {
-            year ??= int.Parse(yearMatch.Groups[1].Value);
-            name = name[..yearMatch.Index].Trim();
+            // Strip any residual "(YYYY)" suffix — AltTitles builder already does this,
+            // but apply YearSuffixRe as a safety net for the Name fallback path.
+            int? year = context.Year;
+            string title = rawTitle;
+            var yearMatch = YearSuffixRe.Match(title);
+            if (yearMatch.Success)
+            {
+                year ??= int.Parse(yearMatch.Groups[1].Value);
+                title = title[..yearMatch.Index].Trim();
+            }
+
+            var movieResp = await _client!.SearchMoviesAsync(title, year, ct).ConfigureAwait(false);
+            foreach (var m in movieResp.Results ?? [])
+                stage1aCandidates.Add(ScoreCandidate(context, MapMovie(m)));
+
+            var tvResp = await _client!.SearchTvAsync(title, year, ct).ConfigureAwait(false);
+            foreach (var t in tvResp.Results ?? [])
+                stage1aCandidates.Add(ScoreCandidate(context, MapTv(t)));
+
+            // Short-circuit if any candidate already has an exact title match.
+            if (stage1aCandidates.Any(c => c.Score >= ExactMatchThreshold))
+            {
+                foundHighScore = true;
+                break;
+            }
         }
 
-        // Search both movie and TV endpoints — scoring determines the winner
-        var candidates = new List<ScoredCandidate>();
+        // If Stage 1a produced a strong hit, return immediately without year-less fallback.
+        if (foundHighScore)
+        {
+            return stage1aCandidates
+                .Where(c => c.Metadata.ExternalId is not null)
+                .OrderByDescending(c => c.Score)
+                .ThenByDescending(c => GetPopularity(c.Metadata))
+                .Take(10)
+                .ToList();
+        }
 
-        var movieResp = await _client!.SearchMoviesAsync(name, year, ct).ConfigureAwait(false);
-        foreach (var m in movieResp.Results ?? [])
-            candidates.Add(ScoreCandidate(context, MapMovie(m)));
+        // Stage 1b — each AltTitle WITHOUT year.
+        var stage1bCandidates = new List<ScoredCandidate>();
 
-        var tvResp = await _client!.SearchTvAsync(name, year, ct).ConfigureAwait(false);
-        foreach (var t in tvResp.Results ?? [])
-            candidates.Add(ScoreCandidate(context, MapTv(t)));
+        foreach (var rawTitle in titlesToTry)
+        {
+            string title = rawTitle;
+            var yearMatch = YearSuffixRe.Match(title);
+            if (yearMatch.Success)
+                title = title[..yearMatch.Index].Trim();
 
-        return candidates
+            var movieResp = await _client!.SearchMoviesAsync(title, year: null, ct).ConfigureAwait(false);
+            foreach (var m in movieResp.Results ?? [])
+                stage1bCandidates.Add(ScoreCandidate(context, MapMovie(m)));
+
+            var tvResp = await _client!.SearchTvAsync(title, year: null, ct).ConfigureAwait(false);
+            foreach (var t in tvResp.Results ?? [])
+                stage1bCandidates.Add(ScoreCandidate(context, MapTv(t)));
+        }
+
+        // Merge stage 1a (year-confirmed) first, then stage 1b.
+        var allCandidates = stage1aCandidates.Concat(stage1bCandidates);
+
+        return allCandidates
             .Where(c => c.Metadata.ExternalId is not null)
             .OrderByDescending(c => c.Score)
+            .ThenByDescending(c => GetPopularity(c.Metadata))
             .Take(10)
             .ToList();
+    }
+
+    /// <summary>Reads the popularity value stored in a candidate's ExtendedData.</summary>
+    private static double GetPopularity(MediaMetadata m)
+    {
+        if (m.ExtendedData is not { } ext)
+            return 0d;
+
+        if (ext.TryGetProperty("popularity", out var prop)
+            && prop.ValueKind == System.Text.Json.JsonValueKind.Number)
+            return prop.GetDouble();
+
+        return 0d;
     }
 
     private static ScoredCandidate ScoreCandidate(MediaSearchContext ctx, MediaMetadata candidate)
@@ -207,7 +279,18 @@ public sealed class TmdbMetadataProvider : IMetadataProvider
         var reasons = new List<string>();
 
         var cn = Normalize(candidate.Title ?? string.Empty);
-        var qn = Normalize(ctx.Name);
+
+        // Build the best normalized query name to compare against.
+        // AltTitles[0] is typically the year-stripped PreciseName or clean name; prefer it
+        // over ctx.Name which may still carry a "(YYYY)" suffix from the fallback path.
+        // If no AltTitles, strip any year suffix from ctx.Name manually.
+        string rawQueryName = ctx.AltTitles is { Count: > 0 }
+            ? ctx.AltTitles[0]
+            : ctx.Name;
+        var suffixMatch = YearSuffixRe.Match(rawQueryName);
+        if (suffixMatch.Success)
+            rawQueryName = rawQueryName[..suffixMatch.Index].Trim();
+        var qn = Normalize(rawQueryName);
 
         if (string.Equals(cn, qn, StringComparison.Ordinal))
         {
@@ -232,26 +315,51 @@ public sealed class TmdbMetadataProvider : IMetadataProvider
                 score += 10;
                 reasons.Add("year ±1");
             }
+            else
+            {
+                score -= 10;
+                reasons.Add("year mismatch");
+            }
         }
 
-        // Popularity tiebreaker: when title and year scores are equal, prefer more well-known
-        // results.  Adds 0–10 points based on vote_average so "What If...?" (8.4/10, Marvel)
-        // beats "What If" (4.0/10, obscure short) even though both are named "What If" from 2021.
-        // Capped at 10 so it cannot override a title or year signal.
-        if (candidate.Rating is > 0)
+        // Precise-name tiebreaker: use the exact title from file metadata (NFO <title>) when
+        // available.  Unlike the normalised comparison above, this keeps punctuation so that
+        // "What If...?" stays distinct from "What If".  Only applied when PreciseName is
+        // explicitly set — never falls back to the folder/item name, which would favour the
+        // wrong candidate (the exact-match show) over the right one (the show with "...?").
+        if (!string.IsNullOrEmpty(ctx.PreciseName))
         {
-            var boost = (int)Math.Min(Math.Round(candidate.Rating.Value), 10.0);
-            score += boost;
-            reasons.Add($"rating boost +{boost}");
+            var pn = ctx.PreciseName.Trim();
+            var ct2 = (candidate.Title ?? string.Empty).Trim();
+            if (string.Equals(pn, ct2, StringComparison.OrdinalIgnoreCase))
+            {
+                score += 15;
+                reasons.Add("precise name exact");
+            }
+            else if (ct2.Contains(pn, StringComparison.OrdinalIgnoreCase)
+                  || pn.Contains(ct2, StringComparison.OrdinalIgnoreCase))
+            {
+                score += 5;
+                reasons.Add("precise name contains");
+            }
         }
+
+        // NOTE: child-count scoring for TV shows (comparing ChildNames.Count against
+        // numberOfSeasons) is intentionally omitted here.  TMDB's /search/tv endpoint
+        // does NOT return number_of_seasons — that field is only available in the
+        // /tv/{id} detail response (called from GetByIdAsync).  Attempting to read it
+        // from ExtendedData during SearchAsync will always find null/absent, so the
+        // bonus would never fire.  numberOfSeasons IS stored in MapTv's ExtendedData
+        // so that the enriched metadata record retains it for display purposes.
 
         return new ScoredCandidate(candidate, score,
             reasons.Count > 0 ? string.Join(", ", reasons) : "no signals");
     }
 
     private static string Normalize(string s) =>
-        System.Text.RegularExpressions.Regex.Replace(s.Trim(), @"[:\-,\.']", " ")
-            .Replace("  ", " ").Trim().ToLowerInvariant();
+        System.Text.RegularExpressions.Regex.Replace(
+            System.Text.RegularExpressions.Regex.Replace(s.Trim(), @"[:\-,\.']", " "),
+            @"\s+", " ").Trim().ToLowerInvariant();
 
     // ── IMetadataProvider: get by ID ──────────────────────────────────────────
 
@@ -339,6 +447,10 @@ public sealed class TmdbMetadataProvider : IMetadataProvider
         Genres          = m.Genres?.Select(g => g.Name).ToList() ?? [],
         Cast            = m.Credits?.Cast?.OrderBy(c => c.Order).Select(c => c.Name).Take(10).ToList() ?? [],
         Directors       = m.Credits?.Crew?.Where(c => c.Job == "Director").Select(c => c.Name).ToList() ?? [],
+        ExtendedData    = System.Text.Json.JsonSerializer.SerializeToElement(new
+        {
+            popularity = m.Popularity,
+        }),
     };
 
     private MediaMetadata MapTv(TmdbTv t) => new()
@@ -355,6 +467,11 @@ public sealed class TmdbMetadataProvider : IMetadataProvider
         Genres          = t.Genres?.Select(g => g.Name).ToList() ?? [],
         Cast            = t.Credits?.Cast?.OrderBy(c => c.Order).Select(c => c.Name).Take(10).ToList() ?? [],
         Directors       = [],   // TV uses Crew differently; simplified for now
+        ExtendedData    = System.Text.Json.JsonSerializer.SerializeToElement(new
+        {
+            popularity      = t.Popularity,
+            numberOfSeasons = t.NumberOfSeasons,
+        }),
     };
 
     private static MediaMetadata MapTvSeason(TmdbSeason season, string externalId) => new()
