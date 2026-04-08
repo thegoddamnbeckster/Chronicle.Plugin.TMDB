@@ -521,13 +521,19 @@ public sealed class TmdbMetadataProvider : IMetadataProvider
     /// Converts a full TMDB URL to a typed external ID.
     /// e.g. https://www.themoviedb.org/tv/127839-top-chef-amateurs?language=en-CA → tv:127839
     ///      https://www.themoviedb.org/movie/550-fight-club                       → movie:550
+    ///      https://www.themoviedb.org/tv/3534/season/1/episode/23               → tv:3534/season:1/episode:23
+    ///      https://www.themoviedb.org/tv/3534/season/1                          → tv:3534/season:1
     /// </summary>
     private static string NormalizeTmdbUrl(string url)
     {
         try
         {
             var uri = new Uri(url);
-            // Path looks like /tv/127839-some-slug or /movie/550-some-slug
+            // Path looks like:
+            //   /tv/127839-some-slug
+            //   /movie/550-some-slug
+            //   /tv/3534-some-slug/season/1/episode/23
+            //   /tv/3534-some-slug/season/1
             var segments = uri.AbsolutePath.Trim('/').Split('/');
             if (segments.Length >= 2)
             {
@@ -535,7 +541,22 @@ public sealed class TmdbMetadataProvider : IMetadataProvider
                 // The segment may be "127839-some-slug" — extract the leading digits
                 var idPart = segments[1].Split('-')[0];
                 if (type is "tv" or "movie" && int.TryParse(idPart, out _))
+                {
+                    // Check for /season/{n}/episode/{m} or /season/{n}
+                    if (type == "tv" && segments.Length >= 4
+                        && string.Equals(segments[2], "season", StringComparison.OrdinalIgnoreCase)
+                        && int.TryParse(segments[3], out var seasonNum))
+                    {
+                        if (segments.Length >= 6
+                            && string.Equals(segments[4], "episode", StringComparison.OrdinalIgnoreCase)
+                            && int.TryParse(segments[5], out var episodeNum))
+                        {
+                            return $"tv:{idPart}/season:{seasonNum}/episode:{episodeNum}";
+                        }
+                        return $"tv:{idPart}/season:{seasonNum}";
+                    }
                     return $"{type}:{idPart}";
+                }
             }
         }
         catch { /* fall through to let GetByIdAsync handle the malformed input */ }

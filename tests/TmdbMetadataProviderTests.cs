@@ -311,11 +311,11 @@ public class TmdbMetadataProviderTests
     // ── GetByIdAsync: URL normalization ──────────────────────────────────────
 
     [Theory]
-    [InlineData("https://www.themoviedb.org/tv/127839-top-chef-amateurs?language=en-CA", "tv:127839")]
-    [InlineData("https://www.themoviedb.org/tv/1399", "tv:1399")]
-    [InlineData("https://www.themoviedb.org/movie/550-fight-club", "movie:550")]
-    [InlineData("https://www.themoviedb.org/movie/550", "movie:550")]
-    public async Task GetByIdAsync_NormalizesTmdbUrls(string inputUrl, string expectedId)
+    [InlineData("https://www.themoviedb.org/tv/127839-top-chef-amateurs?language=en-CA", "/tv/127839")]
+    [InlineData("https://www.themoviedb.org/tv/1399", "/tv/1399")]
+    [InlineData("https://www.themoviedb.org/movie/550-fight-club", "/movie/550")]
+    [InlineData("https://www.themoviedb.org/movie/550", "/movie/550")]
+    public async Task GetByIdAsync_NormalizesTmdbUrls(string inputUrl, string expectedPathSegment)
     {
         string? capturedId = null;
         var handler = new StubHandler(req =>
@@ -329,10 +329,29 @@ public class TmdbMetadataProviderTests
         try { await provider.GetByIdAsync(inputUrl); } catch { /* ignore mapping errors */ }
 
         Assert.NotNull(capturedId);
-        var type = expectedId.Split(':')[0];
-        var id   = expectedId.Split(':')[1];
         // Verify the HTTP call targeted the right endpoint (not the raw URL)
-        Assert.Contains($"/{type}/{id}", capturedId);
+        Assert.Contains(expectedPathSegment, capturedId);
+    }
+
+    [Theory]
+    [InlineData("https://www.themoviedb.org/tv/3534-space-above-and-beyond/season/1/episode/23", "/tv/3534/season/1/episode/23")]
+    [InlineData("https://www.themoviedb.org/tv/3534/season/1/episode/23", "/tv/3534/season/1/episode/23")]
+    [InlineData("https://www.themoviedb.org/tv/3534/season/2", "/tv/3534/season/2")]
+    public async Task GetByIdAsync_NormalizesTmdbEpisodeSeasonUrls(string inputUrl, string expectedPathSegment)
+    {
+        string? capturedPath = null;
+        var handler = new StubHandler(req =>
+        {
+            capturedPath = req.RequestUri?.PathAndQuery;
+            // Return minimal episode/season response to avoid mapping errors
+            return Json("""{ "id": 1, "name": "Test", "overview": "", "air_date": "1995-01-01", "episodes": [] }""");
+        });
+        var provider = BuildProvider(handler);
+
+        try { await provider.GetByIdAsync(inputUrl); } catch { /* ignore mapping errors */ }
+
+        Assert.NotNull(capturedPath);
+        Assert.Contains(expectedPathSegment, capturedPath);
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────────
