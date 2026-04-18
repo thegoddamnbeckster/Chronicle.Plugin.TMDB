@@ -60,6 +60,14 @@ public sealed class TmdbMetadataProvider : IMetadataProvider
             SupportedFields = ["title", "overview", "year", "poster_url", "backdrop_url",
                                "runtime_minutes", "genres", "cast", "directors", "rating"],
         },
+        // Fan edits are movies — use the same /search/movie and /movie/{id} endpoints.
+        new MediaTypeSupport
+        {
+            MediaTypeName   = "fanedits",
+            DefaultPriority = 10,
+            SupportedFields = ["title", "overview", "year", "poster_url", "backdrop_url",
+                               "runtime_minutes", "genres", "cast", "directors", "rating"],
+        },
         new MediaTypeSupport
         {
             MediaTypeName   = "tv",
@@ -170,10 +178,35 @@ public sealed class TmdbMetadataProvider : IMetadataProvider
     /// <summary>Minimum score for a Stage 1a result to short-circuit Stage 1b (year-less search).</summary>
     private const int ExactMatchThreshold = 60;
 
+    /// <summary>
+    /// Returns true when the media type name maps to a movie-type search endpoint.
+    /// "fanedits" are movies at the source level — they reference real TMDB movie IDs.
+    /// </summary>
+    private static bool IsMovieType(string? mediaTypeName) =>
+        mediaTypeName is null
+        || mediaTypeName.Equals("movies",   StringComparison.OrdinalIgnoreCase)
+        || mediaTypeName.Equals("movie",    StringComparison.OrdinalIgnoreCase)
+        || mediaTypeName.Equals("fanedits", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// Returns true when the media type name maps to a TV-type search endpoint.
+    /// </summary>
+    private static bool IsTvType(string? mediaTypeName) =>
+        mediaTypeName is null
+        || mediaTypeName.Equals("tv", StringComparison.OrdinalIgnoreCase)
+        || mediaTypeName.StartsWith("tv ", StringComparison.OrdinalIgnoreCase);
+
     public async Task<IReadOnlyList<ScoredCandidate>> SearchAsync(
         MediaSearchContext context, CancellationToken ct = default)
     {
         EnsureConfigured();
+
+        // Determine which TMDB endpoints to query.
+        // When MediaTypeName is provided, restrict to the relevant endpoint only —
+        // this prevents a movie query from matching a same-named TV show (or vice versa).
+        // When MediaTypeName is null (old callers), query both for full coverage.
+        bool searchMovies = IsMovieType(context.MediaTypeName);
+        bool searchTv     = IsTvType(context.MediaTypeName);
 
         // Build the ordered list of titles to try.  AltTitles already contains the
         // year-stripped name, filename stem, and qualifier-stripped forms in order.
@@ -203,13 +236,19 @@ public sealed class TmdbMetadataProvider : IMetadataProvider
                 title = title[..yearMatch.Index].Trim();
             }
 
-            var movieResp = await _client!.SearchMoviesAsync(title, year, ct).ConfigureAwait(false);
-            foreach (var m in movieResp.Results ?? [])
-                stage1aCandidates.Add(ScoreCandidate(context, MapMovie(m)));
+            if (searchMovies)
+            {
+                var movieResp = await _client!.SearchMoviesAsync(title, year, ct).ConfigureAwait(false);
+                foreach (var m in movieResp.Results ?? [])
+                    stage1aCandidates.Add(ScoreCandidate(context, MapMovie(m)));
+            }
 
-            var tvResp = await _client!.SearchTvAsync(title, year, ct).ConfigureAwait(false);
-            foreach (var t in tvResp.Results ?? [])
-                stage1aCandidates.Add(ScoreCandidate(context, MapTv(t)));
+            if (searchTv)
+            {
+                var tvResp = await _client!.SearchTvAsync(title, year, ct).ConfigureAwait(false);
+                foreach (var t in tvResp.Results ?? [])
+                    stage1aCandidates.Add(ScoreCandidate(context, MapTv(t)));
+            }
 
             // Short-circuit if any candidate already has an exact title match.
             if (stage1aCandidates.Any(c => c.Score >= ExactMatchThreshold))
@@ -240,13 +279,19 @@ public sealed class TmdbMetadataProvider : IMetadataProvider
             if (yearMatch.Success)
                 title = title[..yearMatch.Index].Trim();
 
-            var movieResp = await _client!.SearchMoviesAsync(title, year: null, ct).ConfigureAwait(false);
-            foreach (var m in movieResp.Results ?? [])
-                stage1bCandidates.Add(ScoreCandidate(context, MapMovie(m)));
+            if (searchMovies)
+            {
+                var movieResp = await _client!.SearchMoviesAsync(title, year: null, ct).ConfigureAwait(false);
+                foreach (var m in movieResp.Results ?? [])
+                    stage1bCandidates.Add(ScoreCandidate(context, MapMovie(m)));
+            }
 
-            var tvResp = await _client!.SearchTvAsync(title, year: null, ct).ConfigureAwait(false);
-            foreach (var t in tvResp.Results ?? [])
-                stage1bCandidates.Add(ScoreCandidate(context, MapTv(t)));
+            if (searchTv)
+            {
+                var tvResp = await _client!.SearchTvAsync(title, year: null, ct).ConfigureAwait(false);
+                foreach (var t in tvResp.Results ?? [])
+                    stage1bCandidates.Add(ScoreCandidate(context, MapTv(t)));
+            }
         }
 
         // Merge stage 1a (year-confirmed) first, then stage 1b.
