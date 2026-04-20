@@ -1,5 +1,5 @@
 {
-  "plugin_id": "tmdb",
+  "plugin_id": "chronicle.plugin.tmdb",
   "name": "TMDB",
   "version": "1.0.0",
   "author": "Chronicle Contributors",

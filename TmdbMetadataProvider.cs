@@ -11,7 +11,7 @@ public sealed class TmdbMetadataProvider : IMetadataProvider
 {
     // ── IMetadataProvider identity ────────────────────────────────────────────
 
-    public string PluginId => "tmdb";
+    public string PluginId => "chronicle.plugin.tmdb";
     public string Name     => "TMDB";
     public string Version  => "1.0.0";
     public string Author   => "Chronicle Contributors";
