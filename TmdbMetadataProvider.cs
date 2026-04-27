@@ -44,15 +44,16 @@ public sealed class TmdbMetadataProvider : IMetadataProvider
 
     public MediaTypeSupport[] GetSupportedMediaTypes() =>
     [
-        // Chronicle's DB uses "movies" (plural); "movie" is kept for any legacy records.
-        // Both map to the same TMDB /search/movie and /movie/{id} endpoints.
         new MediaTypeSupport
         {
             MediaTypeName   = "movies",
+            DisplayName     = "Movies",
+            HierarchyLevels = 1,
             DefaultPriority = 10,
             SupportedFields = ["title", "overview", "year", "poster_url", "backdrop_url",
-                               "runtime_minutes", "genres", "cast", "directors", "rating"],
+                               "runtime_minutes", "genres", "cast", "directors", "rating", "tags"],
         },
+        // Legacy alias — no DisplayName so it is not synced to the media_types table.
         new MediaTypeSupport
         {
             MediaTypeName   = "movie",
@@ -60,20 +61,44 @@ public sealed class TmdbMetadataProvider : IMetadataProvider
             SupportedFields = ["title", "overview", "year", "poster_url", "backdrop_url",
                                "runtime_minutes", "genres", "cast", "directors", "rating"],
         },
-        // Fan edits are movies — use the same /search/movie and /movie/{id} endpoints.
         new MediaTypeSupport
         {
             MediaTypeName   = "fanedits",
+            DisplayName     = "Fan Edits",
+            HierarchyLevels = 1,
             DefaultPriority = 10,
             SupportedFields = ["title", "overview", "year", "poster_url", "backdrop_url",
-                               "runtime_minutes", "genres", "cast", "directors", "rating"],
+                               "runtime_minutes", "genres", "cast", "directors", "rating", "tags"],
         },
         new MediaTypeSupport
         {
-            MediaTypeName   = "tv",
-            DefaultPriority = 10,
-            SupportedFields = ["title", "overview", "year", "poster_url", "backdrop_url",
-                               "runtime_minutes", "genres", "cast", "rating"],
+            MediaTypeName    = "tv",
+            DisplayName      = "TV",
+            HierarchyLevels  = 3,
+            HierarchyLabels  = ["Show", "Season", "Episode"],
+            DefaultPriority  = 10,
+            SupportedFields  = ["title", "overview", "year", "poster_url", "backdrop_url",
+                                "genres", "cast", "directors", "rating", "tags"],
+            LevelFields = new Dictionary<int, List<string>>
+            {
+                [1] = ["title", "overview", "year", "poster_url", "backdrop_url", "tags"],
+                [2] = ["title", "overview", "year", "runtime_minutes", "tags"],
+            },
+        },
+        new MediaTypeSupport
+        {
+            MediaTypeName    = "anime",
+            DisplayName      = "Anime",
+            HierarchyLevels  = 3,
+            HierarchyLabels  = ["Show", "Season", "Episode"],
+            DefaultPriority  = 10,
+            SupportedFields  = ["title", "overview", "year", "poster_url", "backdrop_url",
+                                "genres", "cast", "directors", "rating", "tags"],
+            LevelFields = new Dictionary<int, List<string>>
+            {
+                [1] = ["title", "overview", "year", "poster_url", "backdrop_url", "tags"],
+                [2] = ["title", "overview", "year", "runtime_minutes", "tags"],
+            },
         },
     ];
 
