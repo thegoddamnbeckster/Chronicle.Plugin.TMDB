@@ -596,41 +596,48 @@ public sealed class TmdbMetadataProvider : IMetadataProvider
     /// </summary>
     private static string NormalizeTmdbUrl(string url)
     {
-        try
+        if (!Uri.TryCreate(url, UriKind.Absolute, out var uri))
+            throw new ArgumentException($"Invalid TMDB URL: '{url}'");
+
+        if (!uri.Host.Equals("www.themoviedb.org", StringComparison.OrdinalIgnoreCase) &&
+            !uri.Host.Equals("themoviedb.org", StringComparison.OrdinalIgnoreCase))
+            throw new ArgumentException(
+                $"URL is not a themoviedb.org address: '{url}'");
+
+        // Path looks like:
+        //   /tv/127839-some-slug
+        //   /movie/550-some-slug
+        //   /tv/3534-some-slug/season/1/episode/23
+        //   /tv/3534-some-slug/season/1
+        var segments = uri.AbsolutePath.Trim('/').Split('/');
+        if (segments.Length < 2)
+            throw new ArgumentException(
+                $"Cannot extract content type and ID from TMDB URL: '{url}'. " +
+                "Expected /movie/{{id}} or /tv/{{id}}.");
+
+        var type = segments[0].ToLowerInvariant();
+        if (type is not "tv" and not "movie")
+            throw new ArgumentException(
+                $"Unrecognised TMDB content type '{type}' in URL: '{url}'. Expected /movie/ or /tv/.");
+
+        // The segment may be "127839-some-slug" — extract the leading numeric portion.
+        var idPart = segments[1].Split('-')[0];
+        if (!int.TryParse(idPart, out _))
+            throw new ArgumentException(
+                $"Cannot extract a numeric TMDB ID from URL segment '{segments[1]}' in: '{url}'");
+
+        // Check for /season/{n}/episode/{m} or /season/{n}
+        if (type == "tv" && segments.Length >= 4
+            && string.Equals(segments[2], "season", StringComparison.OrdinalIgnoreCase)
+            && int.TryParse(segments[3], out var seasonNum))
         {
-            var uri = new Uri(url);
-            // Path looks like:
-            //   /tv/127839-some-slug
-            //   /movie/550-some-slug
-            //   /tv/3534-some-slug/season/1/episode/23
-            //   /tv/3534-some-slug/season/1
-            var segments = uri.AbsolutePath.Trim('/').Split('/');
-            if (segments.Length >= 2)
-            {
-                var type = segments[0].ToLowerInvariant();   // "tv" or "movie"
-                // The segment may be "127839-some-slug" — extract the leading digits
-                var idPart = segments[1].Split('-')[0];
-                if (type is "tv" or "movie" && int.TryParse(idPart, out _))
-                {
-                    // Check for /season/{n}/episode/{m} or /season/{n}
-                    if (type == "tv" && segments.Length >= 4
-                        && string.Equals(segments[2], "season", StringComparison.OrdinalIgnoreCase)
-                        && int.TryParse(segments[3], out var seasonNum))
-                    {
-                        if (segments.Length >= 6
-                            && string.Equals(segments[4], "episode", StringComparison.OrdinalIgnoreCase)
-                            && int.TryParse(segments[5], out var episodeNum))
-                        {
-                            return $"tv:{idPart}/season:{seasonNum}/episode:{episodeNum}";
-                        }
-                        return $"tv:{idPart}/season:{seasonNum}";
-                    }
-                    return $"{type}:{idPart}";
-                }
-            }
+            if (segments.Length >= 6
+                && string.Equals(segments[4], "episode", StringComparison.OrdinalIgnoreCase)
+                && int.TryParse(segments[5], out var episodeNum))
+                return $"tv:{idPart}/season:{seasonNum}/episode:{episodeNum}";
+            return $"tv:{idPart}/season:{seasonNum}";
         }
-        catch { /* fall through to let GetByIdAsync handle the malformed input */ }
-        return url;
+        return $"{type}:{idPart}";
     }
 
     private void EnsureConfigured()
