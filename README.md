@@ -48,13 +48,31 @@ Fix Match accepts full TMDB URLs:
 | `poster_size` | | `w500` | TMDB image size for poster art |
 | `backdrop_size` | | `w1280` | TMDB image size for backdrop images |
 
+## Deploying
+
+```powershell
+$pluginDir = "..\Chronicle\src\Chronicle.API\plugins\chronicle.plugin.tmdb"
+New-Item -ItemType Directory -Force $pluginDir
+dotnet build -c Release
+Copy-Item "bin\Release\net9.0\*.dll" $pluginDir
+Copy-Item "manifest.json"           $pluginDir
+```
+
 ## Development
 
-This plugin references Chronicle.Plugins via a local path reference:
+Both repositories must be cloned as siblings for the project reference to resolve:
+
+```
+<base>\
+  Chronicle\
+  Chronicle.Plugin.TMDB\
+```
+
+The plugin references `Chronicle.Plugins` via a local project reference:
 
 ```xml
 <ProjectReference Include="..\Chronicle\src\Chronicle.Plugins\Chronicle.Plugins.csproj"
                   Private="false" ExcludeAssets="runtime" />
 ```
 
-`Chronicle.Plugins.dll` must **not** be copied to the plugin output directory — the host provides it.
+> **Important:** `Chronicle.Plugins.dll` must **not** be in the plugin output directory — the Chronicle host provides it. `<Private>false</Private>` prevents it from being copied.
