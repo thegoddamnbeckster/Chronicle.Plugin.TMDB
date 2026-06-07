@@ -1,5 +1,7 @@
 # Chronicle.Plugin.TMDB
 
+[![Latest Release](https://img.shields.io/github/v/release/thegoddamnbeckster/Chronicle.Plugin.TMDB?label=Chronicle.Plugin.TMDB&color=01b4e4)](https://github.com/thegoddamnbeckster/Chronicle.Plugin.TMDB/releases/latest)
+
 TMDB metadata provider plugin for [Chronicle](https://github.com/thegoddamnbeckster/Chronicle).
 
 Fetches movie and TV metadata — titles, overviews, cast, crew, ratings, genres, poster and backdrop images — from [The Movie Database (TMDB)](https://www.themoviedb.org/).
