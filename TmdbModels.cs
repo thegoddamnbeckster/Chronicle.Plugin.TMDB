@@ -14,17 +14,25 @@ internal record TmdbSearchResponse<T>(
 // ── Movie ─────────────────────────────────────────────────────────────────────
 
 internal record TmdbMovie(
-    [property: JsonPropertyName("id")]             int       Id,
-    [property: JsonPropertyName("title")]          string    Title,
-    [property: JsonPropertyName("overview")]       string?   Overview,
-    [property: JsonPropertyName("release_date")]   string?   ReleaseDate,
-    [property: JsonPropertyName("poster_path")]    string?   PosterPath,
-    [property: JsonPropertyName("backdrop_path")]  string?   BackdropPath,
-    [property: JsonPropertyName("runtime")]        int?      Runtime,
-    [property: JsonPropertyName("vote_average")]   double?   VoteAverage,
-    [property: JsonPropertyName("popularity")]     double?   Popularity,
-    [property: JsonPropertyName("genres")]         List<TmdbGenre>? Genres,
-    [property: JsonPropertyName("credits")]        TmdbCredits?     Credits
+    [property: JsonPropertyName("id")]                    int       Id,
+    [property: JsonPropertyName("title")]                 string    Title,
+    [property: JsonPropertyName("overview")]              string?   Overview,
+    [property: JsonPropertyName("release_date")]          string?   ReleaseDate,
+    [property: JsonPropertyName("poster_path")]           string?   PosterPath,
+    [property: JsonPropertyName("backdrop_path")]         string?   BackdropPath,
+    [property: JsonPropertyName("runtime")]               int?      Runtime,
+    [property: JsonPropertyName("vote_average")]          double?   VoteAverage,
+    [property: JsonPropertyName("popularity")]            double?   Popularity,
+    [property: JsonPropertyName("genres")]                List<TmdbGenre>?  Genres,
+    [property: JsonPropertyName("credits")]               TmdbCredits?      Credits,
+    [property: JsonPropertyName("belongs_to_collection")] TmdbBelongsToCollection? BelongsToCollection
+);
+
+internal record TmdbBelongsToCollection(
+    [property: JsonPropertyName("id")]            int     Id,
+    [property: JsonPropertyName("name")]          string  Name,
+    [property: JsonPropertyName("poster_path")]   string? PosterPath,
+    [property: JsonPropertyName("backdrop_path")] string? BackdropPath
 );
 
 // ── TV show ───────────────────────────────────────────────────────────────────
@@ -96,3 +104,23 @@ internal record TmdbCrewMember(
     [property: JsonPropertyName("job")]        string? Job,
     [property: JsonPropertyName("department")] string? Department
 );
+
+// ── Collection detail ──────────────────────────────────────────────────────────
+
+internal sealed class TmdbCollection
+{
+    [JsonPropertyName("id")]            public int Id { get; set; }
+    [JsonPropertyName("name")]          public string Name { get; set; } = string.Empty;
+    [JsonPropertyName("overview")]      public string? Overview { get; set; }
+    [JsonPropertyName("poster_path")]   public string? PosterPath { get; set; }
+    [JsonPropertyName("backdrop_path")] public string? BackdropPath { get; set; }
+    [JsonPropertyName("parts")]         public List<TmdbCollectionPart>? Parts { get; set; }
+}
+
+internal sealed class TmdbCollectionPart
+{
+    [JsonPropertyName("id")]            public int Id { get; set; }
+    [JsonPropertyName("title")]         public string? Title { get; set; }
+    [JsonPropertyName("release_date")]  public string? ReleaseDate { get; set; }
+    [JsonPropertyName("poster_path")]   public string? PosterPath { get; set; }
+}

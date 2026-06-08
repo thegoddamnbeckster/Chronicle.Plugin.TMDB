@@ -520,6 +520,15 @@ public sealed class TmdbMetadataProvider : IMetadataProvider
         ExtendedData    = System.Text.Json.JsonSerializer.SerializeToElement(new
         {
             popularity = m.Popularity,
+            belongsToCollection = m.BelongsToCollection is null ? null : new
+            {
+                id           = m.BelongsToCollection.Id,
+                name         = m.BelongsToCollection.Name,
+                posterPath   = m.BelongsToCollection.PosterPath is not null
+                                  ? _client!.BuildImageUrl(m.BelongsToCollection.PosterPath, _posterSize) : null,
+                backdropPath = m.BelongsToCollection.BackdropPath is not null
+                                  ? _client!.BuildImageUrl(m.BelongsToCollection.BackdropPath, _backdropSize) : null,
+            },
         }),
     };
 

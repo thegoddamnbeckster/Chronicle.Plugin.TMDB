@@ -47,6 +47,12 @@ internal sealed class TmdbClient
         return GetAsync<TmdbMovie>(url, ct);
     }
 
+    public Task<TmdbCollection> GetCollectionAsync(int collectionId, CancellationToken ct = default)
+    {
+        var url = $"{BaseUrl}/collection/{collectionId}?api_key={_apiKey}&language={_language}";
+        return GetAsync<TmdbCollection>(url, ct);
+    }
+
     // ── TV Shows ─────────────────────────────────────────────────────────────
 
     public Task<TmdbSearchResponse<TmdbTv>> SearchTvAsync(string query, int? year = null, CancellationToken ct = default)
