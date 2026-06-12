@@ -51,7 +51,8 @@ public sealed class TmdbMetadataProvider : IMetadataProvider
             HierarchyLevels = 1,
             DefaultPriority = 10,
             SupportedFields = ["title", "overview", "year", "poster_url", "backdrop_url",
-                               "runtime_minutes", "genres", "cast", "directors", "rating", "tags"],
+                               "runtime_minutes", "genres", "cast", "directors", "rating", "tags",
+                               "collection"],
         },
         // Legacy alias — no DisplayName so it is not synced to the media_types table.
         new MediaTypeSupport
@@ -61,15 +62,10 @@ public sealed class TmdbMetadataProvider : IMetadataProvider
             SupportedFields = ["title", "overview", "year", "poster_url", "backdrop_url",
                                "runtime_minutes", "genres", "cast", "directors", "rating"],
         },
-        new MediaTypeSupport
-        {
-            MediaTypeName   = "fanedits",
-            DisplayName     = "Fan Edits",
-            HierarchyLevels = 1,
-            DefaultPriority = 10,
-            SupportedFields = ["title", "overview", "year", "poster_url", "backdrop_url",
-                               "runtime_minutes", "genres", "cast", "directors", "rating", "tags"],
-        },
+        // Fan Edits are identified exclusively by the FanEdit plugin; TMDB contributes
+        // movie metadata via cross-ref seeding after the FanEdit plugin locates the item.
+        // Declaring "fanedits" here caused TMDB to appear in the Add Media Fan Edits search,
+        // returning generic movie results that are not fan edits.
         new MediaTypeSupport
         {
             MediaTypeName    = "tv",
@@ -480,8 +476,9 @@ public sealed class TmdbMetadataProvider : IMetadataProvider
 
         return type switch
         {
-            "tv"    => MapTv(await _client!.GetTvAsync(id, ct).ConfigureAwait(false)),
-            _       => MapMovie(await _client!.GetMovieAsync(id, ct).ConfigureAwait(false)),
+            "tv"         => MapTv(await _client!.GetTvAsync(id, ct).ConfigureAwait(false)),
+            "collection" => MapCollection(await _client!.GetCollectionAsync(int.Parse(id), ct).ConfigureAwait(false)),
+            _            => MapMovie(await _client!.GetMovieAsync(id, ct).ConfigureAwait(false)),
         };
     }
 
@@ -502,6 +499,29 @@ public sealed class TmdbMetadataProvider : IMetadataProvider
     }
 
     // ── Mapping helpers ───────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Maps a TMDB collection to a <see cref="MediaMetadata"/> whose <c>Results</c> list
+    /// contains one entry per collection part (movie). Used by MovieCollectionService to
+    /// discover and create stub MediaItems for movies not yet in the user's library.
+    /// </summary>
+    private MediaMetadata MapCollection(TmdbCollection c) => new()
+    {
+        ExternalId = $"collection:{c.Id}",
+        Source     = "tmdb",
+        Title      = c.Name,
+        Overview   = c.Overview,
+        PosterUrl  = c.PosterPath is not null ? _client!.BuildImageUrl(c.PosterPath, _posterSize) : null,
+        Results    = c.Parts?.Select(p => new MediaMetadata
+        {
+            ExternalId = $"movie:{p.Id}",
+            Source     = "tmdb",
+            Title      = p.Title ?? string.Empty,
+            Year       = ParseYear(p.ReleaseDate),
+            PosterUrl  = p.PosterPath is not null ? _client!.BuildImageUrl(p.PosterPath, _posterSize) : null,
+            Rating     = p.VoteAverage,
+        }).ToList() ?? [],
+    };
 
     private MediaMetadata MapMovie(TmdbMovie m) => new()
     {
@@ -652,6 +672,8 @@ public sealed class TmdbMetadataProvider : IMetadataProvider
     private void EnsureConfigured()
     {
         if (_client is null)
-            throw new InvalidOperationException("TmdbMetadataProvider has not been configured. Call Configure() first.");
+            throw new Chronicle.Plugins.PluginAuthException(
+                "chronicle.plugin.tmdb",
+                "TMDB plugin is not configured — set an API key in Settings → Plugins → TMDB.");
     }
 }
