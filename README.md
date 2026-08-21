@@ -17,6 +17,11 @@ Fetches movie and TV metadata — titles, overviews, cast, crew, ratings, genres
 | `tv.1` (Seasons) | title, overview, year, poster_url, backdrop_url |
 | `tv.2` (Episodes) | title, overview, year, poster_url, runtime_minutes |
 
+Movie collections are also supported via `GetByIdAsync` (looked up by TMDB collection id,
+never by search — TMDB has no search-by-collection endpoint): poster, backdrop, and logo
+are all resolved through the same language-preference-aware image selection, from
+`/collection/{id}/images`'s full, unfiltered set of alternates.
+
 ## External ID Format
 
 `{type}:{tmdbId}` — for example:
