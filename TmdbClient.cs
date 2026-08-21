@@ -43,7 +43,7 @@ internal sealed class TmdbClient
 
     public Task<TmdbMovie> GetMovieAsync(string tmdbId, CancellationToken ct = default)
     {
-        var url = $"{BaseUrl}/movie/{tmdbId}?api_key={_apiKey}&language={_language}&append_to_response=credits";
+        var url = $"{BaseUrl}/movie/{tmdbId}?api_key={_apiKey}&language={_language}&append_to_response=credits,release_dates,videos";
         return GetAsync<TmdbMovie>(url, ct);
     }
 
@@ -51,6 +51,19 @@ internal sealed class TmdbClient
     {
         var url = $"{BaseUrl}/collection/{collectionId}?api_key={_apiKey}&language={_language}";
         return GetAsync<TmdbCollection>(url, ct);
+    }
+
+    /// <summary>
+    /// Every poster and backdrop TMDB holds for a collection, not just the one on the detail
+    /// record. Deliberately sends no <c>language</c> — that parameter filters images down to a
+    /// handful, and Chronicle ingests losslessly and lets the user choose. This is why it's a
+    /// separate request rather than <c>append_to_response=images</c>, which inherits the
+    /// language filter from the detail call.
+    /// </summary>
+    public Task<TmdbImageList> GetCollectionImagesAsync(int collectionId, CancellationToken ct = default)
+    {
+        var url = $"{BaseUrl}/collection/{collectionId}/images?api_key={_apiKey}";
+        return GetAsync<TmdbImageList>(url, ct);
     }
 
     // ── TV Shows ─────────────────────────────────────────────────────────────
@@ -64,7 +77,7 @@ internal sealed class TmdbClient
 
     public Task<TmdbTv> GetTvAsync(string tmdbId, CancellationToken ct = default)
     {
-        var url = $"{BaseUrl}/tv/{tmdbId}?api_key={_apiKey}&language={_language}&append_to_response=credits";
+        var url = $"{BaseUrl}/tv/{tmdbId}?api_key={_apiKey}&language={_language}&append_to_response=credits,content_ratings,videos,external_ids";
         return GetAsync<TmdbTv>(url, ct);
     }
 

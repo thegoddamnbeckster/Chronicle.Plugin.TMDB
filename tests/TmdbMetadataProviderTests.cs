@@ -354,7 +354,287 @@ public class TmdbMetadataProviderTests
         Assert.Contains(expectedPathSegment, capturedPath);
     }
 
+    // ── GetByIdAsync: collection artwork ─────────────────────────────────────
+    // A collection's detail record carries exactly one poster_path, but TMDB holds dozens of
+    // alternates behind /images (81 posters for the Die Hard collection). Without these the
+    // Additional Images gallery has nothing to offer for a collection and its artwork can't
+    // be chosen the way every other media type's can.
+
+    [Fact]
+    public async Task GetByIdAsync_Collection_FetchesFullImageList()
+    {
+        var handler = new StubHandler(CollectionRoutes);
+        var provider = BuildProvider(handler);
+
+        var result = await provider.GetByIdAsync("collection:1570");
+
+        Assert.Equal(4, result.AdditionalImages.Count);
+        Assert.Equal(2, result.AdditionalImages.Count(i => i.Type == "poster"));
+        Assert.Equal(1, result.AdditionalImages.Count(i => i.Type == "backdrop"));
+        Assert.Equal(1, result.AdditionalImages.Count(i => i.Type == "logo"));
+    }
+
+    [Fact]
+    public async Task GetByIdAsync_Collection_ImagesRequestSendsNoLanguageFilter()
+    {
+        // TMDB's `language` parameter silently drops most artwork — 81 posters collapse to a
+        // handful. Chronicle ingests losslessly and lets the user choose, so the images call
+        // must stay unfiltered.
+        string? imagesUrl = null;
+        var handler = new StubHandler(req =>
+        {
+            if (req.RequestUri!.PathAndQuery.Contains("/images"))
+                imagesUrl = req.RequestUri.PathAndQuery;
+            return CollectionRoutes(req);
+        });
+        var provider = BuildProvider(handler);
+
+        await provider.GetByIdAsync("collection:1570");
+
+        Assert.NotNull(imagesUrl);
+        Assert.DoesNotContain("language=", imagesUrl);
+    }
+
+    [Fact]
+    public async Task GetByIdAsync_Collection_UsesCanonicalSlotTypeNames()
+    {
+        // These strings are the frontend's TYPE_TO_SLOT keys. If they drift, collection art
+        // silently stops being promotable with no error anywhere.
+        var handler = new StubHandler(CollectionRoutes);
+        var provider = BuildProvider(handler);
+
+        var result = await provider.GetByIdAsync("collection:1570");
+
+        Assert.All(result.AdditionalImages,
+            i => Assert.Contains(i.Type, new[] { "poster", "backdrop", "logo" }));
+    }
+
+    [Fact]
+    public async Task GetByIdAsync_Collection_OrdersImagesByVoteBestFirst()
+    {
+        var handler = new StubHandler(CollectionRoutes);
+        var provider = BuildProvider(handler);
+
+        var result = await provider.GetByIdAsync("collection:1570");
+
+        var posters = result.AdditionalImages.Where(i => i.Type == "poster").ToList();
+        Assert.Contains("/best.jpg", posters[0].Url);
+        Assert.Contains("/worst.jpg", posters[1].Url);
+    }
+
+    [Fact]
+    public async Task GetByIdAsync_Collection_ThumbnailIsSmallerThanFullImage()
+    {
+        var handler = new StubHandler(CollectionRoutes);
+        var provider = BuildProvider(handler);
+
+        var poster = (await provider.GetByIdAsync("collection:1570")).AdditionalImages[0];
+
+        Assert.Contains("/original/", poster.Url);
+        Assert.Contains("/w500/", poster.ThumbnailUrl);
+    }
+
+    [Fact]
+    public async Task GetByIdAsync_Collection_StillCarriesPosterBackdropAndParts()
+    {
+        var handler = new StubHandler(CollectionRoutes);
+        var provider = BuildProvider(handler);
+
+        var result = await provider.GetByIdAsync("collection:1570");
+
+        Assert.Equal("Die Hard Collection", result.Title);
+        Assert.NotNull(result.PosterUrl);
+        Assert.NotNull(result.BackdropUrl);
+        Assert.Single(result.Results!);
+        Assert.Equal("movie:562", result.Results![0].ExternalId);
+    }
+
+    [Fact]
+    public async Task GetByIdAsync_Collection_PosterPrefersConfiguredLanguageOverHigherVotedOther()
+    {
+        // Regression for a real bug (confirmed live 2026-08-20): the collection detail
+        // endpoint's own poster_path doesn't reliably respect the configured language the way
+        // /movie and /tv do, so an unrelated-language poster could win purely on vote count.
+        // Here the German poster outscores the English one, but the configured language
+        // ("en-US", via BuildProvider) must still win.
+        var handler = new StubHandler(req => req.RequestUri!.PathAndQuery.Contains("/images")
+            ? Json("""
+                {
+                    "posters": [
+                        { "file_path": "/german-higher-voted.jpg", "width": 1000, "height": 1500,
+                          "iso_639_1": "de", "vote_average": 9.0, "vote_count": 50 },
+                        { "file_path": "/english-lower-voted.jpg", "width": 1000, "height": 1500,
+                          "iso_639_1": "en", "vote_average": 3.0, "vote_count": 5 }
+                    ],
+                    "backdrops": [], "logos": []
+                }
+                """)
+            : CollectionDetailResponse());
+        var provider = BuildProvider(handler);
+
+        var result = await provider.GetByIdAsync("collection:1570");
+
+        Assert.Equal("https://image.tmdb.org/t/p/w500/english-lower-voted.jpg", result.PosterUrl);
+    }
+
+    [Fact]
+    public async Task GetByIdAsync_Collection_PosterFallsBackToTextlessWhenNoLanguageMatch()
+    {
+        // No poster tagged for the configured language ("en-US") exists at all -- textless
+        // (universal) art must win over a higher-voted but wrong-language poster, rather than
+        // falling through to the detail endpoint's own (unreliable, per the test above) pick.
+        var handler = new StubHandler(req => req.RequestUri!.PathAndQuery.Contains("/images")
+            ? Json("""
+                {
+                    "posters": [
+                        { "file_path": "/portuguese.jpg", "width": 1000, "height": 1500,
+                          "iso_639_1": "pt", "vote_average": 8.0, "vote_count": 30 },
+                        { "file_path": "/textless.jpg", "width": 1000, "height": 1500,
+                          "iso_639_1": null, "vote_average": 4.0, "vote_count": 10 }
+                    ],
+                    "backdrops": [], "logos": []
+                }
+                """)
+            : CollectionDetailResponse());
+        var provider = BuildProvider(handler);
+
+        var result = await provider.GetByIdAsync("collection:1570");
+
+        Assert.Equal("https://image.tmdb.org/t/p/w500/textless.jpg", result.PosterUrl);
+    }
+
+    [Fact]
+    public async Task GetByIdAsync_Collection_PosterIsNullWhenNoAcceptableLanguageOrTextlessOption()
+    {
+        // The real bug (confirmed live 2026-08-21 on two real collections): TMDB's gallery held
+        // exactly one poster, wrong-language, nothing else on file. Falling back to "highest
+        // vote overall" or the detail endpoint's own pick would just re-select that same
+        // unwanted poster every rebuild. Null is correct here -- it's what lets
+        // MovieCollectionService clear the stale poster and fall back to a member movie's own
+        // poster instead, rather than this plugin insisting on the only (wrong) one it has.
+        var handler = new StubHandler(req => req.RequestUri!.PathAndQuery.Contains("/images")
+            ? Json("""
+                {
+                    "posters": [
+                        { "file_path": "/only-portuguese.jpg", "width": 1000, "height": 1500,
+                          "iso_639_1": "pt", "vote_average": 8.0, "vote_count": 30 }
+                    ],
+                    "backdrops": [], "logos": []
+                }
+                """)
+            : CollectionDetailResponse());
+        var provider = BuildProvider(handler);
+
+        var result = await provider.GetByIdAsync("collection:1570");
+
+        Assert.Null(result.PosterUrl);
+    }
+
+    [Fact]
+    public async Task GetByIdAsync_Collection_BackdropPrefersConfiguredLanguageOverHigherVotedOther()
+    {
+        // Same regression as the poster tests above, applied to BackdropUrl -- it used to come
+        // straight from the collection detail endpoint's own (unreliable) backdrop_path instead
+        // of going through this same language-preferred selection over the full gallery.
+        var handler = new StubHandler(req => req.RequestUri!.PathAndQuery.Contains("/images")
+            ? Json("""
+                {
+                    "posters": [], "logos": [],
+                    "backdrops": [
+                        { "file_path": "/german-higher-voted.jpg", "width": 1920, "height": 1080,
+                          "iso_639_1": "de", "vote_average": 9.0, "vote_count": 50 },
+                        { "file_path": "/english-lower-voted.jpg", "width": 1920, "height": 1080,
+                          "iso_639_1": "en", "vote_average": 3.0, "vote_count": 5 }
+                    ]
+                }
+                """)
+            : CollectionDetailResponse());
+        var provider = BuildProvider(handler);
+
+        var result = await provider.GetByIdAsync("collection:1570");
+
+        Assert.Equal("https://image.tmdb.org/t/p/w1280/english-lower-voted.jpg", result.BackdropUrl);
+    }
+
+    [Fact]
+    public async Task GetByIdAsync_Collection_LogoUrlIsPopulatedFromGallery()
+    {
+        // Previously never set at all for collections -- TMDB's logos gallery was already being
+        // fetched and stored in AdditionalImages, but nothing ever promoted one to a first-class
+        // LogoUrl the way posters/backdrops get, so a collection's clearlogo could only ever be
+        // set by a manual pin, never auto-resolved.
+        var handler = new StubHandler(req => req.RequestUri!.PathAndQuery.Contains("/images")
+            ? Json("""
+                {
+                    "posters": [], "backdrops": [],
+                    "logos": [
+                        { "file_path": "/en-logo.png", "width": 800, "height": 310,
+                          "iso_639_1": "en", "vote_average": 5.0, "vote_count": 1 }
+                    ]
+                }
+                """)
+            : CollectionDetailResponse());
+        var provider = BuildProvider(handler);
+
+        var result = await provider.GetByIdAsync("collection:1570");
+
+        Assert.Equal("https://image.tmdb.org/t/p/original/en-logo.png", result.LogoUrl);
+    }
+
+    [Fact]
+    public async Task GetByIdAsync_Collection_ImagesFailure_StillReturnsParts()
+    {
+        // The parts list is what MovieCollectionService builds the hierarchy from. A flaky or
+        // rate-limited images call must not take the whole collection down with it.
+        var handler = new StubHandler(req => req.RequestUri!.PathAndQuery.Contains("/images")
+            ? new HttpResponseMessage(HttpStatusCode.TooManyRequests)
+            : CollectionDetailResponse());
+        var provider = BuildProvider(handler);
+
+        var result = await provider.GetByIdAsync("collection:1570");
+
+        Assert.Empty(result.AdditionalImages);
+        Assert.Single(result.Results!);
+        Assert.Equal("Die Hard Collection", result.Title);
+    }
+
     // ── Helpers ───────────────────────────────────────────────────────────────
+
+    private static HttpResponseMessage CollectionRoutes(HttpRequestMessage req) =>
+        req.RequestUri!.PathAndQuery.Contains("/images")
+            ? CollectionImagesResponse()
+            : CollectionDetailResponse();
+
+    private static HttpResponseMessage CollectionDetailResponse() =>
+        Json("""
+            {
+                "id": 1570, "name": "Die Hard Collection",
+                "overview": "John McClane keeps having a bad day.",
+                "poster_path": "/detail-poster.jpg", "backdrop_path": "/detail-backdrop.jpg",
+                "parts": [{ "id": 562, "title": "Die Hard", "release_date": "1988-07-15",
+                            "poster_path": "/dh.jpg", "vote_average": 7.8 }]
+            }
+            """);
+
+    private static HttpResponseMessage CollectionImagesResponse() =>
+        Json("""
+            {
+                "posters": [
+                    { "file_path": "/worst.jpg", "width": 1000, "height": 1500,
+                      "iso_639_1": "pt", "vote_average": 1.0, "vote_count": 2 },
+                    { "file_path": "/best.jpg", "width": 2000, "height": 3000,
+                      "iso_639_1": null, "vote_average": 9.5, "vote_count": 40 }
+                ],
+                "backdrops": [
+                    { "file_path": "/bd.jpg", "width": 1920, "height": 1080,
+                      "iso_639_1": null, "vote_average": 5.0, "vote_count": 3 }
+                ],
+                "logos": [
+                    { "file_path": "/logo.png", "width": 800, "height": 310,
+                      "iso_639_1": "en", "vote_average": 5.0, "vote_count": 1 }
+                ]
+            }
+            """);
 
     private static TmdbMetadataProvider BuildProvider(StubHandler handler)
     {

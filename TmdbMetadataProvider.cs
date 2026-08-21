@@ -51,7 +51,7 @@ public sealed class TmdbMetadataProvider : IMetadataProvider
             HierarchyLevels = 1,
             DefaultPriority = 10,
             SupportedFields = ["title", "overview", "year", "poster_url", "backdrop_url",
-                               "runtime_minutes", "genres", "cast", "directors", "rating", "tags",
+                               "runtime_minutes", "genres", "cast", "crew", "rating", "tags",
                                "collection"],
         },
         // Legacy alias — no DisplayName so it is not synced to the media_types table.
@@ -60,7 +60,7 @@ public sealed class TmdbMetadataProvider : IMetadataProvider
             MediaTypeName   = "movie",
             DefaultPriority = 10,
             SupportedFields = ["title", "overview", "year", "poster_url", "backdrop_url",
-                               "runtime_minutes", "genres", "cast", "directors", "rating"],
+                               "runtime_minutes", "genres", "cast", "crew", "rating"],
         },
         // Fan Edits are identified exclusively by the FanEdit plugin; TMDB contributes
         // movie metadata via cross-ref seeding after the FanEdit plugin locates the item.
@@ -74,7 +74,7 @@ public sealed class TmdbMetadataProvider : IMetadataProvider
             HierarchyLabels  = ["Show", "Season", "Episode"],
             DefaultPriority  = 10,
             SupportedFields  = ["title", "overview", "year", "poster_url", "backdrop_url",
-                                "genres", "cast", "directors", "rating", "tags"],
+                                "genres", "cast", "crew", "rating", "tags"],
             LevelFields = new Dictionary<int, List<string>>
             {
                 [1] = ["title", "overview", "year", "poster_url", "backdrop_url", "tags"],
@@ -89,12 +89,26 @@ public sealed class TmdbMetadataProvider : IMetadataProvider
             HierarchyLabels  = ["Show", "Season", "Episode"],
             DefaultPriority  = 10,
             SupportedFields  = ["title", "overview", "year", "poster_url", "backdrop_url",
-                                "genres", "cast", "directors", "rating", "tags"],
+                                "genres", "cast", "crew", "rating", "tags"],
             LevelFields = new Dictionary<int, List<string>>
             {
                 [1] = ["title", "overview", "year", "poster_url", "backdrop_url", "tags"],
                 [2] = ["title", "overview", "year", "runtime_minutes", "tags"],
             },
+        },
+        // Standalone anime films — flat like "movies", not hierarchical like "anime" (which is
+        // Show/Season/Episode for real anime TV series). Split out so anime films are
+        // collection-eligible the same way movies/fanedits are, without needing a TV-shaped
+        // Season/Episode structure they don't have.
+        new MediaTypeSupport
+        {
+            MediaTypeName   = "anime_movies",
+            DisplayName     = "Anime Movies",
+            HierarchyLevels = 1,
+            DefaultPriority = 10,
+            SupportedFields = ["title", "overview", "year", "poster_url", "backdrop_url",
+                               "runtime_minutes", "genres", "cast", "crew", "rating", "tags",
+                               "collection"],
         },
     ];
 
@@ -114,7 +128,12 @@ public sealed class TmdbMetadataProvider : IMetadataProvider
             {
                 Key          = KeyLanguage,
                 Label        = "Language",
-                Description  = "BCP 47 language tag used for titles and overviews (e.g. en-US, de-DE).",
+                Description  = "BCP 47 language tag used for titles and overviews (e.g. en-US, de-DE). " +
+                                "Also used to pick a collection's poster: TMDB's own top-level pick for a " +
+                                "collection doesn't reliably respect this the way it does for movies/shows " +
+                                "(confirmed live -- a Turkish-market poster won over an obvious English one " +
+                                "for a collection with no other English art on file), so collection posters " +
+                                "are instead chosen from TMDB's full image gallery, preferring this language.",
                 Type         = SettingType.Text,
                 Required     = false,
                 DefaultValue = "en-US",
@@ -184,10 +203,12 @@ public sealed class TmdbMetadataProvider : IMetadataProvider
         );
         _posterSize   = posterSize   ?? "w500";
         _backdropSize = backdropSize ?? "w1280";
+        _language     = language     ?? "en-US";
     }
 
     private string _posterSize   = "w500";
     private string _backdropSize = "w1280";
+    private string _language     = "en-US";
 
     // ── IMetadataProvider: search ─────────────────────────────────────────────
 
@@ -440,8 +461,12 @@ public sealed class TmdbMetadataProvider : IMetadataProvider
         // Normalize full TMDB URLs → typed IDs before processing.
         // e.g. https://www.themoviedb.org/tv/127839-top-chef-amateurs?language=en-CA → tv:127839
         //      https://www.themoviedb.org/movie/550-fight-club → movie:550
+        //      https://www.themoviedb.org/search/movie?query=... → resolved via search, below
         if (externalId.StartsWith("http", StringComparison.OrdinalIgnoreCase))
-            externalId = NormalizeTmdbUrl(externalId);
+        {
+            var resolvedFromSearch = await TryResolveSearchUrlAsync(externalId, ct).ConfigureAwait(false);
+            externalId = resolvedFromSearch ?? NormalizeTmdbUrl(externalId);
+        }
 
         // Supported formats:
         //   movie:{tmdbId}                        → /movie/{id}
@@ -477,7 +502,7 @@ public sealed class TmdbMetadataProvider : IMetadataProvider
         return type switch
         {
             "tv"         => MapTv(await _client!.GetTvAsync(id, ct).ConfigureAwait(false)),
-            "collection" => MapCollection(await _client!.GetCollectionAsync(int.Parse(id), ct).ConfigureAwait(false)),
+            "collection" => await GetCollectionWithImagesAsync(int.Parse(id), ct).ConfigureAwait(false),
             _            => MapMovie(await _client!.GetMovieAsync(id, ct).ConfigureAwait(false)),
         };
     }
@@ -501,18 +526,56 @@ public sealed class TmdbMetadataProvider : IMetadataProvider
     // ── Mapping helpers ───────────────────────────────────────────────────────
 
     /// <summary>
+    /// Collection detail plus its full artwork list. The image call is best-effort: a
+    /// collection with unreachable images is still worth returning with its parts, which are
+    /// what MovieCollectionService actually needs to build the hierarchy.
+    /// </summary>
+    private async Task<MediaMetadata> GetCollectionWithImagesAsync(int collectionId, CancellationToken ct)
+    {
+        var detail = await _client!.GetCollectionAsync(collectionId, ct).ConfigureAwait(false);
+
+        // Swallowed deliberately: artwork is supplementary, but `parts` is what
+        // MovieCollectionService uses to build the hierarchy. Letting a rate-limited or flaky
+        // second request take the whole collection down would turn a cosmetic gap into a
+        // structural one. A failure here degrades to exactly today's behaviour — one poster.
+        TmdbImageList? images = null;
+        try
+        {
+            images = await _client.GetCollectionImagesAsync(collectionId, ct).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) { throw; }
+        catch (HttpRequestException) { }
+
+        return MapCollection(detail, images);
+    }
+
+    /// <summary>
     /// Maps a TMDB collection to a <see cref="MediaMetadata"/> whose <c>Results</c> list
     /// contains one entry per collection part (movie). Used by MovieCollectionService to
     /// discover and create stub MediaItems for movies not yet in the user's library.
     /// </summary>
-    private MediaMetadata MapCollection(TmdbCollection c) => new()
+    private MediaMetadata MapCollection(TmdbCollection c, TmdbImageList? images = null) => new()
     {
-        ExternalId = $"collection:{c.Id}",
-        Source     = "tmdb",
-        Title      = c.Name,
-        Overview   = c.Overview,
-        PosterUrl  = c.PosterPath is not null ? _client!.BuildImageUrl(c.PosterPath, _posterSize) : null,
-        Results    = c.Parts?.Select(p => new MediaMetadata
+        ExternalId  = $"collection:{c.Id}",
+        Source      = "tmdb",
+        Title       = c.Name,
+        Overview    = c.Overview,
+        // All three go through the same language-preferred/textless/null selection over the
+        // full un-filtered gallery -- see SelectPreferredImageUrl. None of them use the
+        // collection detail endpoint's own top-level poster_path/backdrop_path, even though
+        // that request also carries &language={_language} -- confirmed live (2026-08-20/21)
+        // that /collection/{id} does NOT reliably honor it the way /movie/{id} and /tv/{id} do,
+        // unlike the single-poster/backdrop fields movies and shows get (see MapMovie/MapTVShow
+        // below), which stay on the server-filtered field precisely because that endpoint DOES
+        // honor language reliably -- there's no equivalent bug to fix there.
+        PosterUrl   = SelectPreferredImageUrl(images?.Posters,   _posterSize),
+        BackdropUrl = SelectPreferredImageUrl(images?.Backdrops, _backdropSize),
+        LogoUrl     = SelectPreferredImageUrl(images?.Logos,     "original"),
+        // Every alternate TMDB holds, so a collection can have its artwork chosen the same way
+        // any other media item can. Without this a collection has exactly one poster and the
+        // Additional Images gallery has nothing to offer.
+        AdditionalImages = BuildCollectionImages(images),
+        Results     = c.Parts?.Select(p => new MediaMetadata
         {
             ExternalId = $"movie:{p.Id}",
             Source     = "tmdb",
@@ -522,6 +585,84 @@ public sealed class TmdbMetadataProvider : IMetadataProvider
             Rating     = p.VoteAverage,
         }).ToList() ?? [],
     };
+
+    /// <summary>
+    /// Picks one image from a full TMDB image-type list (posters, backdrops, or logos) using the
+    /// configured language preference, instead of trusting a detail endpoint's own single
+    /// top-level pick. Confirmed live 2026-08-20/21: unlike /movie/{id} and /tv/{id}, which
+    /// genuinely honor the configured `language` query parameter for their own top-level
+    /// poster_path/backdrop_path, TMDB's /collection/{id} endpoint does not reliably do the same
+    /// for ANY of poster_path/backdrop_path -- "The Social Network Collection" and "The Sea Beast
+    /// Collection" both landed on a non-English poster (Turkish, Spanish-market) purely because
+    /// that happened to be the top overall vote, with a perfectly good English poster sitting
+    /// unused in the same gallery. This is why collections re-select from the full,
+    /// deliberately-unfiltered gallery (GetCollectionImagesAsync) client-side instead, while
+    /// movies/shows/seasons/episodes stay on their own detail endpoint's server-filtered field --
+    /// there's no equivalent bug to work around there.
+    ///
+    /// Preference order: an exact match for the configured language (highest-voted among those)
+    /// -&gt; textless/universal art (no burned-in text to be in the "wrong" language) -&gt; null.
+    ///
+    /// Deliberately null, not "highest vote regardless of language" or a detail endpoint's own
+    /// unreliable pick, when neither of the above exists -- confirmed live 2026-08-21 that for
+    /// some collections TMDB's ENTIRE gallery is a single non-English image with nothing else on
+    /// file, so "highest vote overall" always just re-selected that same wrong-language image on
+    /// every rebuild, no matter how the language preference was applied. Returning null instead
+    /// lets MovieCollectionService.PersistCollectionMetadataAsync clear a stale value and fall
+    /// back to something better (a member movie's own poster, for PosterUrl specifically) rather
+    /// than this plugin insisting on an unwanted image just because it's the only one TMDB has.
+    /// </summary>
+    private string? SelectPreferredImageUrl(List<TmdbImage>? images, string size)
+    {
+        if (images is not { Count: > 0 }) return null;
+
+        var preferredLanguage = _language.Split('-')[0];
+
+        var best =
+            images.Where(i => string.Equals(i.Language, preferredLanguage, StringComparison.OrdinalIgnoreCase))
+                  .OrderByDescending(i => i.VoteAverage).ThenByDescending(i => i.VoteCount).FirstOrDefault()
+            ?? images.Where(i => i.Language is null)
+                  .OrderByDescending(i => i.VoteAverage).ThenByDescending(i => i.VoteCount).FirstOrDefault();
+
+        return best is not null && !string.IsNullOrWhiteSpace(best.FilePath)
+            ? _client!.BuildImageUrl(best.FilePath, size)
+            : null;
+    }
+
+    /// <summary>
+    /// Flattens TMDB's per-kind image lists into the generic AdditionalImage pool. Types are
+    /// the lowercase slot vocabulary the frontend's TYPE_TO_SLOT table already understands
+    /// ("poster", "backdrop", "logo"), so collection artwork becomes promotable with no
+    /// frontend change.
+    /// </summary>
+    private List<AdditionalImage> BuildCollectionImages(TmdbImageList? images)
+    {
+        if (images is null) return [];
+
+        var result = new List<AdditionalImage>();
+        Add(images.Posters,   "poster");
+        Add(images.Backdrops, "backdrop");
+        Add(images.Logos,     "logo");
+        return result;
+
+        void Add(List<TmdbImage>? list, string type)
+        {
+            if (list is null) return;
+            // Best first: community score, then vote count as the tiebreak, so the gallery
+            // opens on the artwork most people picked rather than an arbitrary upload order.
+            foreach (var img in list.OrderByDescending(i => i.VoteAverage).ThenByDescending(i => i.VoteCount))
+            {
+                if (string.IsNullOrWhiteSpace(img.FilePath)) continue;
+                result.Add(new AdditionalImage
+                {
+                    // Full size for the viewer, w500 for the thumbnail grid.
+                    Url          = _client!.BuildImageUrl(img.FilePath, "original"),
+                    ThumbnailUrl = _client!.BuildImageUrl(img.FilePath, "w500"),
+                    Type         = type,
+                });
+            }
+        }
+    }
 
     private MediaMetadata MapMovie(TmdbMovie m) => new()
     {
@@ -535,8 +676,8 @@ public sealed class TmdbMetadataProvider : IMetadataProvider
         RuntimeMinutes  = m.Runtime,
         Rating          = m.VoteAverage,
         Genres          = m.Genres?.Select(g => g.Name).ToList() ?? [],
-        Cast            = m.Credits?.Cast?.OrderBy(c => c.Order).Select(c => c.Name).Take(10).ToList() ?? [],
-        Directors       = m.Credits?.Crew?.Where(c => c.Job == "Director").Select(c => c.Name).ToList() ?? [],
+        Cast            = m.Credits?.Cast?.OrderBy(c => c.Order).Select(c => new CastMember(c.Name, c.Character)).Take(10).ToList() ?? [],
+        Crew            = m.Credits?.Crew?.Select(c => new CrewMember(c.Name, c.Job)).ToList() ?? [],
         ExtendedData    = System.Text.Json.JsonSerializer.SerializeToElement(new
         {
             popularity = m.Popularity,
@@ -549,8 +690,47 @@ public sealed class TmdbMetadataProvider : IMetadataProvider
                 backdropPath = m.BelongsToCollection.BackdropPath is not null
                                   ? _client!.BuildImageUrl(m.BelongsToCollection.BackdropPath, _backdropSize) : null,
             },
+            tagline       = m.Tagline,
+            status        = m.Status,
+            homepage      = m.Homepage,
+            released      = m.ReleaseDate,
+            country       = m.ProductionCountries?.Select(c => c.Name).FirstOrDefault(n => n is not null),
+            language      = m.SpokenLanguages?.Select(l => l.EnglishName).FirstOrDefault(n => n is not null),
+            certification = FindUsCertification(m.ReleaseDates),
+            trailer       = FindTrailerUrl(m.Videos),
+            studio        = m.ProductionCompanies?.Select(c => c.Name).FirstOrDefault(n => n is not null),
+            ids           = new { tmdb = m.Id, imdb = m.ImdbId },
         }),
     };
+
+    /// <summary>US theatrical/digital certification (e.g. "PG-13") from the release_dates
+    /// append_to_response block -- falls back to the first non-empty certification from any
+    /// country if the US entry has none, rather than leaving MPAA blank when data exists.</summary>
+    private static string? FindUsCertification(TmdbReleaseDatesResult? releaseDates)
+    {
+        var countries = releaseDates?.Results;
+        if (countries is null) return null;
+
+        var us = countries.FirstOrDefault(c => c.Iso3166_1 == "US");
+        var usCert = us?.ReleaseDates?.Select(r => r.Certification).FirstOrDefault(c => !string.IsNullOrEmpty(c));
+        if (!string.IsNullOrEmpty(usCert)) return usCert;
+
+        return countries
+            .SelectMany(c => c.ReleaseDates ?? [])
+            .Select(r => r.Certification)
+            .FirstOrDefault(c => !string.IsNullOrEmpty(c));
+    }
+
+    /// <summary>Official YouTube trailer URL from the videos append_to_response block, or the
+    /// first YouTube trailer if none is flagged official.</summary>
+    private static string? FindTrailerUrl(TmdbVideosResult? videos)
+    {
+        var candidates = (videos?.Results ?? [])
+            .Where(v => v.Site == "YouTube" && v.Type == "Trailer" && !string.IsNullOrEmpty(v.Key))
+            .ToList();
+        var best = candidates.FirstOrDefault(v => v.Official) ?? candidates.FirstOrDefault();
+        return best is null ? null : $"https://www.youtube.com/watch?v={best.Key}";
+    }
 
     private MediaMetadata MapTv(TmdbTv t) => new()
     {
@@ -564,14 +744,38 @@ public sealed class TmdbMetadataProvider : IMetadataProvider
         RuntimeMinutes  = t.EpisodeRunTime?.FirstOrDefault(),
         Rating          = t.VoteAverage,
         Genres          = t.Genres?.Select(g => g.Name).ToList() ?? [],
-        Cast            = t.Credits?.Cast?.OrderBy(c => c.Order).Select(c => c.Name).Take(10).ToList() ?? [],
-        Directors       = [],   // TV uses Crew differently; simplified for now
+        Cast            = t.Credits?.Cast?.OrderBy(c => c.Order).Select(c => new CastMember(c.Name, c.Character)).Take(10).ToList() ?? [],
+        Crew            = t.Credits?.Crew?.Select(c => new CrewMember(c.Name, c.Job)).ToList() ?? [],
         ExtendedData    = System.Text.Json.JsonSerializer.SerializeToElement(new
         {
             popularity      = t.Popularity,
             numberOfSeasons = t.NumberOfSeasons,
+            tagline       = t.Tagline,
+            status        = t.Status,
+            homepage      = t.Homepage,
+            first_aired   = t.FirstAirDate,
+            network       = t.Networks?.Select(n => n.Name).FirstOrDefault(n => n is not null),
+            country       = t.ProductionCountries?.Select(c => c.Name).FirstOrDefault(n => n is not null),
+            language      = t.SpokenLanguages?.Select(l => l.EnglishName).FirstOrDefault(n => n is not null),
+            certification = FindUsContentRating(t.ContentRatings),
+            trailer       = FindTrailerUrl(t.Videos),
+            ids           = new { tmdb = t.Id, imdb = t.ExternalIds?.ImdbId, tvdb = t.ExternalIds?.TvdbId },
         }),
     };
+
+    /// <summary>US TV content rating (e.g. "TV-MA") from the content_ratings append_to_response
+    /// block -- falls back to the first non-empty rating from any country if the US entry
+    /// has none.</summary>
+    private static string? FindUsContentRating(TmdbContentRatingsResult? contentRatings)
+    {
+        var countries = contentRatings?.Results;
+        if (countries is null) return null;
+
+        var us = countries.FirstOrDefault(c => c.Iso3166_1 == "US")?.Rating;
+        if (!string.IsNullOrEmpty(us)) return us;
+
+        return countries.Select(c => c.Rating).FirstOrDefault(r => !string.IsNullOrEmpty(r));
+    }
 
     private static MediaMetadata MapTvSeason(TmdbSeason season, string externalId) => new()
     {
@@ -617,11 +821,62 @@ public sealed class TmdbMetadataProvider : IMetadataProvider
         date is { Length: >= 4 } && int.TryParse(date[..4], out var y) ? y : null;
 
     /// <summary>
+    /// Resolves a TMDB *search results* URL (e.g. https://www.themoviedb.org/search/movie?query=...)
+    /// to a concrete movie:/tv: external ID by running the query through the TMDB search endpoint
+    /// and taking the top hit. Fix Match users routinely copy this URL straight out of their
+    /// browser's address bar after searching, rather than clicking into the specific title first --
+    /// that URL never resolves to one item on its own, so without this Fix Match always throws
+    /// "Unrecognised TMDB content type 'search'" no matter how many times the same link is retried.
+    /// Returns null for any URL that isn't a /search/{movie|tv} path (movie/tv page URLs, and
+    /// genuinely malformed URLs, fall through unchanged to NormalizeTmdbUrl).
+    /// </summary>
+    private async Task<string?> TryResolveSearchUrlAsync(string url, CancellationToken ct)
+    {
+        if (!Uri.TryCreate(url, UriKind.Absolute, out var uri)) return null;
+        if (!uri.Host.Equals("www.themoviedb.org", StringComparison.OrdinalIgnoreCase) &&
+            !uri.Host.Equals("themoviedb.org", StringComparison.OrdinalIgnoreCase))
+            return null;
+
+        var segments = uri.AbsolutePath.Trim('/').Split('/');
+        if (segments.Length < 2 || !segments[0].Equals("search", StringComparison.OrdinalIgnoreCase))
+            return null;
+
+        var contentType = segments[1].ToLowerInvariant();
+        if (contentType is not "movie" and not "tv") return null;
+
+        string? query = null;
+        foreach (var pair in uri.Query.TrimStart('?').Split('&', StringSplitOptions.RemoveEmptyEntries))
+        {
+            var kv = pair.Split('=', 2);
+            if (kv.Length == 2 && kv[0].Equals("query", StringComparison.OrdinalIgnoreCase))
+            {
+                query = Uri.UnescapeDataString(kv[1].Replace("+", " "));
+                break;
+            }
+        }
+        if (string.IsNullOrWhiteSpace(query)) return null;
+
+        if (contentType == "movie")
+        {
+            var results = await _client!.SearchMoviesAsync(query, ct: ct).ConfigureAwait(false);
+            var top = results.Results?.FirstOrDefault();
+            return top is not null ? $"movie:{top.Id}" : null;
+        }
+        else
+        {
+            var results = await _client!.SearchTvAsync(query, ct: ct).ConfigureAwait(false);
+            var top = results.Results?.FirstOrDefault();
+            return top is not null ? $"tv:{top.Id}" : null;
+        }
+    }
+
+    /// <summary>
     /// Converts a full TMDB URL to a typed external ID.
     /// e.g. https://www.themoviedb.org/tv/127839-top-chef-amateurs?language=en-CA → tv:127839
     ///      https://www.themoviedb.org/movie/550-fight-club                       → movie:550
     ///      https://www.themoviedb.org/tv/3534/season/1/episode/23               → tv:3534/season:1/episode:23
     ///      https://www.themoviedb.org/tv/3534/season/1                          → tv:3534/season:1
+    ///      https://www.themoviedb.org/collection/8864-final-destination-collection → collection:8864
     /// </summary>
     private static string NormalizeTmdbUrl(string url)
     {
@@ -638,6 +893,7 @@ public sealed class TmdbMetadataProvider : IMetadataProvider
         //   /movie/550-some-slug
         //   /tv/3534-some-slug/season/1/episode/23
         //   /tv/3534-some-slug/season/1
+        //   /collection/8864-some-slug
         var segments = uri.AbsolutePath.Trim('/').Split('/');
         if (segments.Length < 2)
             throw new ArgumentException(
@@ -645,9 +901,9 @@ public sealed class TmdbMetadataProvider : IMetadataProvider
                 "Expected /movie/{{id}} or /tv/{{id}}.");
 
         var type = segments[0].ToLowerInvariant();
-        if (type is not "tv" and not "movie")
+        if (type is not "tv" and not "movie" and not "collection")
             throw new ArgumentException(
-                $"Unrecognised TMDB content type '{type}' in URL: '{url}'. Expected /movie/ or /tv/.");
+                $"Unrecognised TMDB content type '{type}' in URL: '{url}'. Expected /movie/, /tv/, or /collection/.");
 
         // The segment may be "127839-some-slug" — extract the leading numeric portion.
         var idPart = segments[1].Split('-')[0];
