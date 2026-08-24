@@ -507,6 +507,49 @@ public sealed class TmdbMetadataProvider : IMetadataProvider
         };
     }
 
+    // ── IMetadataProvider: episode list ───────────────────────────────────────
+
+    public async Task<IReadOnlyList<ProviderEpisodeSummary>> GetEpisodeListAsync(
+        string showExternalId, int seasonNumber, CancellationToken ct = default)
+    {
+        EnsureConfigured();
+
+        // Only handles our own "tv:{id}" show ids -- anything else (a bare numeric id
+        // from a different provider's namespace, a movie id, ...) isn't ours to resolve.
+        var parts = showExternalId.Split(':', 2);
+        if (parts.Length != 2 || !string.Equals(parts[0], "tv", StringComparison.OrdinalIgnoreCase))
+            return [];
+
+        TmdbSeason season;
+        try
+        {
+            season = await _client!.GetTvSeasonAsync(parts[1], seasonNumber.ToString(), ct).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) { throw; }
+        catch (HttpRequestException ex) when (ex.StatusCode == System.Net.HttpStatusCode.NotFound)
+        {
+            // Season doesn't exist upstream (e.g. asked past the show's real season count) --
+            // an empty list tells the caller to stop, not that something went wrong.
+            return [];
+        }
+        // Any OTHER failure (rate limit, network error, auth) is deliberately NOT swallowed
+        // here -- a blanket catch would make the caller's "consecutive empty seasons" loop
+        // misinterpret a transient provider failure as having reached the show's real season
+        // count, silently giving up early. Let it propagate; ScraperController.
+        // EnsureEpisodesResolvedAsync already catches and logs at the top level.
+
+        if (season.Episodes is null) return [];
+
+        return season.Episodes
+            .Select(e => new ProviderEpisodeSummary(
+                EpisodeNumber: e.EpisodeNumber,
+                Title:         e.Name ?? $"Episode {e.EpisodeNumber}",
+                Overview:      e.Overview,
+                StillUrl:      e.StillPath is not null ? $"https://image.tmdb.org/t/p/w500{e.StillPath}" : null,
+                AirDate:       e.AirDate))
+            .ToList();
+    }
+
     // ── IMetadataProvider: image ──────────────────────────────────────────────
 
     public Task<byte[]> GetImageAsync(string url, CancellationToken ct = default)
