@@ -1,5 +1,7 @@
+using System.Net;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using Serilog;
 
 namespace Chronicle.Plugin.TMDB;
 
@@ -9,6 +11,18 @@ namespace Chronicle.Plugin.TMDB;
 /// </summary>
 internal sealed class TmdbClient
 {
+    private static readonly ILogger _log = Log.ForContext<TmdbClient>();
+
+    /// <summary>
+    /// TMDB's real limit is a short rolling per-second window, not a daily quota — unlike
+    /// SIMKL, there is no "give up until tomorrow" condition here, only "back off briefly and
+    /// retry." Capped so a misbehaving response can't stall enrichment indefinitely; bounded
+    /// to one retry since a second 429 in a row almost certainly means something more
+    /// persistent than a momentary burst, and the caller (ultimately Chronicle's own 25s
+    /// ProviderCallGuard) should get to decide what happens next rather than this client
+    /// looping quietly.
+    /// </summary>
+    private static readonly TimeSpan MaxRetryAfterWait = TimeSpan.FromSeconds(30);
     private const string BaseUrl = "https://api.themoviedb.org/3";
     private const string ImageBase = "https://image.tmdb.org/t/p/";
 
@@ -47,6 +61,20 @@ internal sealed class TmdbClient
         return GetAsync<TmdbMovie>(url, ct);
     }
 
+    /// <summary>
+    /// Every poster, backdrop, and logo TMDB holds for a movie, not just the single poster_path/
+    /// backdrop_path on the detail record. Deliberately sends no <c>language</c>, same rationale
+    /// as <see cref="GetCollectionImagesAsync"/> -- that parameter filters the gallery down to a
+    /// handful, and Chronicle ingests losslessly and lets the user choose. This is a separate
+    /// request rather than <c>append_to_response=images</c> on <see cref="GetMovieAsync"/>, which
+    /// would inherit that call's <c>language</c> filter.
+    /// </summary>
+    public Task<TmdbImageList> GetMovieImagesAsync(string tmdbId, CancellationToken ct = default)
+    {
+        var url = $"{BaseUrl}/movie/{tmdbId}/images?api_key={_apiKey}";
+        return GetAsync<TmdbImageList>(url, ct);
+    }
+
     public Task<TmdbCollection> GetCollectionAsync(int collectionId, CancellationToken ct = default)
     {
         var url = $"{BaseUrl}/collection/{collectionId}?api_key={_apiKey}&language={_language}";
@@ -79,6 +107,17 @@ internal sealed class TmdbClient
     {
         var url = $"{BaseUrl}/tv/{tmdbId}?api_key={_apiKey}&language={_language}&append_to_response=credits,content_ratings,videos,external_ids";
         return GetAsync<TmdbTv>(url, ct);
+    }
+
+    /// <summary>
+    /// Every poster, backdrop, and logo TMDB holds for a TV show, not just the single
+    /// poster_path/backdrop_path on the detail record. Same no-<c>language</c> rationale as
+    /// <see cref="GetMovieImagesAsync"/> and <see cref="GetCollectionImagesAsync"/>.
+    /// </summary>
+    public Task<TmdbImageList> GetTvImagesAsync(string tmdbId, CancellationToken ct = default)
+    {
+        var url = $"{BaseUrl}/tv/{tmdbId}/images?api_key={_apiKey}";
+        return GetAsync<TmdbImageList>(url, ct);
     }
 
     public Task<TmdbSeason> GetTvSeasonAsync(string showId, string seasonNumber, CancellationToken ct = default)
@@ -127,10 +166,31 @@ internal sealed class TmdbClient
 
     private async Task<T> GetAsync<T>(string url, CancellationToken ct)
     {
-        var response = await _http.GetAsync(url, ct).ConfigureAwait(false);
+        var response = await SendWithRetryAsync(url, ct).ConfigureAwait(false);
         response.EnsureSuccessStatusCode();
         var stream = await response.Content.ReadAsStreamAsync(ct).ConfigureAwait(false);
         return await JsonSerializer.DeserializeAsync<T>(stream, JsonOptions, ct).ConfigureAwait(false)
                ?? throw new InvalidOperationException("TMDB returned null response.");
+    }
+
+    /// <summary>
+    /// One bounded retry on 429, honoring Retry-After (capped) — see MaxRetryAfterWait's own
+    /// doc for why this is a short backoff, not a SIMKL-style multi-hour cutoff. TMDB previously
+    /// had no 429 handling of any kind here; a rate-limited response just threw immediately via
+    /// EnsureSuccessStatusCode with no chance to recover from what's normally a momentary burst.
+    /// </summary>
+    private async Task<HttpResponseMessage> SendWithRetryAsync(string url, CancellationToken ct)
+    {
+        var response = await _http.GetAsync(url, ct).ConfigureAwait(false);
+        if (response.StatusCode != HttpStatusCode.TooManyRequests)
+            return response;
+
+        var retryAfter = response.Headers.RetryAfter?.Delta ?? TimeSpan.FromSeconds(5);
+        var wait = retryAfter > MaxRetryAfterWait ? MaxRetryAfterWait : retryAfter;
+        _log.Warning("TMDB: rate-limited (429); waiting {Seconds}s before one retry", wait.TotalSeconds);
+
+        response.Dispose();
+        await Task.Delay(wait, ct).ConfigureAwait(false);
+        return await _http.GetAsync(url, ct).ConfigureAwait(false);
     }
 }

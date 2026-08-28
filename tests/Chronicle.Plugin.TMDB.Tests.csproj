@@ -19,6 +19,17 @@
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
       <PrivateAssets>all</PrivateAssets>
     </PackageReference>
+    <!--
+      Unlike the main plugin project, this one does NOT exclude Serilog's runtime assets.
+      Chronicle.Plugin.TMDB.csproj deliberately excludes them (ExcludeAssets="runtime") because
+      in the real host, Serilog.dll is already loaded by Chronicle.API and a second copy would
+      risk a version clash. A standalone `dotnet test` run has no such host providing it, so
+      TmdbClient's Log.ForContext&lt;TmdbClient&gt;() call throws FileNotFoundException the
+      moment a test exercises it unless this test project supplies its own copy. Confirmed
+      directly: every test hitting TmdbClient.GetAsync failed with exactly that exception before
+      this reference was added.
+    -->
+    <PackageReference Include="Serilog" Version="4.3.0" />
   </ItemGroup>
 
 </Project>
