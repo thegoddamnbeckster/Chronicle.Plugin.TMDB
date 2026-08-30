@@ -132,6 +132,25 @@ internal sealed class TmdbClient
         return GetAsync<TmdbEpisode>(url, ct);
     }
 
+    // ── People ───────────────────────────────────────────────────────────────
+
+    public Task<TmdbPerson> GetPersonAsync(string tmdbId, CancellationToken ct = default)
+    {
+        var url = $"{BaseUrl}/person/{tmdbId}?api_key={_apiKey}&language={_language}";
+        return GetAsync<TmdbPerson>(url, ct);
+    }
+
+    /// <summary>
+    /// Every profile photo TMDB holds for a person, not just the single profile_path on the
+    /// detail record -- same "full gallery, no language filter" rationale as
+    /// GetMovieImagesAsync/GetCollectionImagesAsync/GetTvImagesAsync.
+    /// </summary>
+    public Task<TmdbPersonImageList> GetPersonImagesAsync(string tmdbId, CancellationToken ct = default)
+    {
+        var url = $"{BaseUrl}/person/{tmdbId}/images?api_key={_apiKey}";
+        return GetAsync<TmdbPersonImageList>(url, ct);
+    }
+
     // ── Images ────────────────────────────────────────────────────────────────
 
     /// <summary>Downloads raw image bytes from the TMDB image CDN.</summary>

@@ -226,3 +226,24 @@ internal sealed class TmdbImage
     [JsonPropertyName("vote_average")] public double VoteAverage { get; set; }
     [JsonPropertyName("vote_count")]   public int VoteCount { get; set; }
 }
+
+// ── Person ───────────────────────────────────────────────────────────────────
+
+internal sealed class TmdbPerson
+{
+    [JsonPropertyName("id")]           public int Id { get; set; }
+    [JsonPropertyName("name")]         public string Name { get; set; } = string.Empty;
+    [JsonPropertyName("biography")]    public string? Biography { get; set; }
+    [JsonPropertyName("birthday")]     public string? Birthday { get; set; }
+    [JsonPropertyName("deathday")]     public string? Deathday { get; set; }
+    [JsonPropertyName("profile_path")] public string? ProfilePath { get; set; }
+}
+
+/// <summary>Response of /person/{id}/images -- every headshot TMDB holds, not just the one
+/// profile_path the detail endpoint picks. Same "full unfiltered gallery" rationale as
+/// TmdbImageList: TMDB doesn't reliably pick the best/most current photo as the primary one
+/// (confirmed pattern for collections; treated the same way here rather than assumed fixed).</summary>
+internal sealed class TmdbPersonImageList
+{
+    [JsonPropertyName("profiles")] public List<TmdbImage>? Profiles { get; set; }
+}

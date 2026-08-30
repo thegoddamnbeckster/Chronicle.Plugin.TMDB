@@ -110,6 +110,23 @@ public sealed class TmdbMetadataProvider : IMetadataProvider
                                "runtime_minutes", "genres", "cast", "crew", "rating", "tags",
                                "collection"],
         },
+        // No DisplayName -- same convention as the "movie" legacy alias above: this entry does
+        // NOT get synced into the media_types table, so it never registers/owns "people" (the
+        // Wikipedia plugin is that type's canonical registrant, per
+        // docs/plans/2026-08-28-people-section-design.md Section 1.1). TMDB only CONTRIBUTES to
+        // an already-existing person -- cross-reference by ID only (SearchAsync below), never a
+        // blind /search/person call, matching the design's "ID-based resolution only, no new
+        // blind search" rule for every plugin (real common-name collision risk otherwise).
+        new MediaTypeSupport
+        {
+            MediaTypeName   = "people",
+            HierarchyLevels = 1,
+            InteractionVerb = "viewed",
+            ProgressUnit    = "percent",
+            DefaultPriority = 10,
+            SupportedFields = ["title", "overview", "poster_url", "birth_date", "death_date",
+                               "extended_data"],
+        },
     ];
 
     public PluginSettingsSchema GetSettingsSchema() => new()
@@ -242,6 +259,25 @@ public sealed class TmdbMetadataProvider : IMetadataProvider
         MediaSearchContext context, CancellationToken ct = default)
     {
         EnsureConfigured();
+
+        // "people" is resolved by cross-reference only -- an id recorded via
+        // PersonResolutionService when this person was first credited on a TMDB-sourced title
+        // (see MediaTypeSupport's own doc comment above). Deliberately no /search/person call:
+        // a name-based blind search here would reintroduce exactly the common-name collision
+        // risk the People feature design already chose to avoid for every plugin.
+        if (string.Equals(context.MediaTypeName, "people", StringComparison.OrdinalIgnoreCase))
+        {
+            var personId = ExtractPersonTmdbId(context.KnownExternalIds);
+            if (personId is null)
+                return [];
+            try
+            {
+                var metadata = await GetPersonWithImagesAsync(personId, ct).ConfigureAwait(false);
+                return [new ScoredCandidate(metadata, 100, "cross-reference ID match")];
+            }
+            catch (OperationCanceledException) { throw; }
+            catch (HttpRequestException) { return []; }
+        }
 
         // Determine which TMDB endpoints to query.
         // When MediaTypeName is provided, restrict to the relevant endpoint only —
@@ -503,8 +539,26 @@ public sealed class TmdbMetadataProvider : IMetadataProvider
         {
             "tv"         => await GetTvWithImagesAsync(id, ct).ConfigureAwait(false),
             "collection" => await GetCollectionWithImagesAsync(int.Parse(id), ct).ConfigureAwait(false),
+            "person"     => await GetPersonWithImagesAsync(id, ct).ConfigureAwait(false),
             _            => await GetMovieWithImagesAsync(id, ct).ConfigureAwait(false),
         };
+    }
+
+    /// <summary>
+    /// PersonResolutionService stores a person's cross-plugin ExternalPersonId verbatim as
+    /// media_external_ids.ExternalId under Source="tmdb" -- e.g. "tmdb:36801" (the
+    /// "{source}:{id}" convention docs/plans/2026-08-28-people-section-design.md Section 2
+    /// defines for CastMember/CrewMember.ExternalPersonId) -- NOT the bare numeric id every
+    /// other TMDB cross-reference (movie/tv/collection) stores under that same Source. Strip
+    /// the redundant "tmdb:" prefix here rather than changing that storage format, which
+    /// PersonResolutionService's own dedup lookup depends on matching verbatim.
+    /// </summary>
+    private static string? ExtractPersonTmdbId(IReadOnlyDictionary<string, string>? knownExternalIds)
+    {
+        if (knownExternalIds is null || !knownExternalIds.TryGetValue("tmdb", out var raw) || string.IsNullOrEmpty(raw))
+            return null;
+        var idx = raw.LastIndexOf(':');
+        return idx >= 0 ? raw[(idx + 1)..] : raw;
     }
 
     // ── IMetadataProvider: episode list ───────────────────────────────────────
@@ -590,6 +644,28 @@ public sealed class TmdbMetadataProvider : IMetadataProvider
         catch (HttpRequestException) { }
 
         return MapCollection(detail, images);
+    }
+
+    /// <summary>
+    /// Person detail plus their full photo gallery. PosterUrl comes from the detail endpoint's
+    /// own profile_path (like movies/shows -- no equivalent of the collection language-pick bug
+    /// has been observed for people), while AdditionalImages needs the full gallery only
+    /// /person/{id}/images provides. Best-effort images call, same rationale as
+    /// GetMovieWithImagesAsync/GetCollectionWithImagesAsync.
+    /// </summary>
+    private async Task<MediaMetadata> GetPersonWithImagesAsync(string id, CancellationToken ct)
+    {
+        var detail = await _client!.GetPersonAsync(id, ct).ConfigureAwait(false);
+
+        TmdbPersonImageList? images = null;
+        try
+        {
+            images = await _client.GetPersonImagesAsync(id, ct).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) { throw; }
+        catch (HttpRequestException) { }
+
+        return MapPerson(detail, images);
     }
 
     /// <summary>
@@ -867,6 +943,51 @@ public sealed class TmdbMetadataProvider : IMetadataProvider
             ids           = new { tmdb = t.Id, imdb = t.ExternalIds?.ImdbId, tvdb = t.ExternalIds?.TvdbId },
         }),
     };
+
+    private MediaMetadata MapPerson(TmdbPerson p, TmdbPersonImageList? images = null) => new()
+    {
+        ExternalId       = $"person:{p.Id}",
+        Source           = "tmdb",
+        Title            = p.Name,
+        Overview         = p.Biography,
+        PosterUrl        = p.ProfilePath is not null ? _client!.BuildImageUrl(p.ProfilePath, _posterSize) : null,
+        // Only populated by GetPersonWithImagesAsync (the GetByIdAsync/cross-reference
+        // SearchAsync path) -- tagged "poster" (not a new "profile"/"headshot" type) so it
+        // slots directly into the existing poster gallery/pin UI with zero frontend changes.
+        AdditionalImages = BuildProfileImages(images),
+        // birthDate/deathDate match MetadataResolutionService.FieldMap's keys verbatim (see
+        // Chronicle.Plugin.Wikipedia's own BuildExtendedData for the same convention/name).
+        ExtendedData     = System.Text.Json.JsonSerializer.SerializeToElement(new
+        {
+            birthDate = p.Birthday,
+            deathDate = p.Deathday,
+            ids       = new { tmdb = p.Id },
+        }),
+    };
+
+    /// <summary>
+    /// Flattens TMDB's person-images gallery (a single flat "profiles" list, unlike the
+    /// posters/backdrops/logos split BuildAdditionalImages handles) into the generic
+    /// AdditionalImage pool, all tagged "poster" -- a person's headshot IS their poster-slot
+    /// artwork. Best-first by community score, same as BuildAdditionalImages.
+    /// </summary>
+    private List<AdditionalImage> BuildProfileImages(TmdbPersonImageList? images)
+    {
+        if (images?.Profiles is not { Count: > 0 } profiles) return [];
+
+        var result = new List<AdditionalImage>();
+        foreach (var img in profiles.OrderByDescending(i => i.VoteAverage).ThenByDescending(i => i.VoteCount))
+        {
+            if (string.IsNullOrWhiteSpace(img.FilePath)) continue;
+            result.Add(new AdditionalImage
+            {
+                Url          = _client!.BuildImageUrl(img.FilePath, "original"),
+                ThumbnailUrl = _client!.BuildImageUrl(img.FilePath, "w500"),
+                Type         = "poster",
+            });
+        }
+        return result;
+    }
 
     /// <summary>US TV content rating (e.g. "TV-MA") from the content_ratings append_to_response
     /// block -- falls back to the first non-empty rating from any country if the US entry

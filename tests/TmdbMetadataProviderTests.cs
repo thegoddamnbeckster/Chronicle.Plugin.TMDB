@@ -1,5 +1,6 @@
 using System.Net;
 using System.Text;
+using System.Text.Json;
 using Chronicle.Plugin.TMDB;
 using Chronicle.Plugins.Models;
 using Xunit;
@@ -522,6 +523,111 @@ public class TmdbMetadataProviderTests
         Assert.Empty(imageRequests);
         Assert.Empty(results[0].Metadata.AdditionalImages);
     }
+
+    // ── SearchAsync / GetByIdAsync: people ────────────────────────────────────
+    // "people" is resolved by cross-reference only (KnownExternalIds["tmdb"]) -- no
+    // /search/person call, matching the People feature's "ID-based resolution only, no new
+    // blind search" rule (docs/plans/2026-08-28-people-section-design.md).
+
+    [Fact]
+    public async Task SearchAsync_People_NoKnownTmdbId_ReturnsEmptyWithoutAnyRequest()
+    {
+        var requested = false;
+        var handler = new StubHandler(_ => { requested = true; return EmptySearchResponse(); });
+        var provider = BuildProvider(handler);
+
+        var results = await provider.SearchAsync(new MediaSearchContext("Adam Scott", MediaTypeName: "people"));
+
+        Assert.Empty(results);
+        Assert.False(requested);
+    }
+
+    [Fact]
+    public async Task SearchAsync_People_KnownTmdbId_CrossReferencesWithoutBlindSearch()
+    {
+        // PersonResolutionService stores the cross-plugin ExternalPersonId verbatim under
+        // Source="tmdb" -- "tmdb:36801", not the bare id every other TMDB cross-reference uses.
+        var searchRequested = false;
+        var handler = new StubHandler(req =>
+        {
+            if (req.RequestUri!.PathAndQuery.Contains("/search/"))
+                searchRequested = true;
+            return req.RequestUri!.PathAndQuery.Contains("/images")
+                ? PersonImagesResponse()
+                : PersonDetailResponse();
+        });
+        var provider = BuildProvider(handler);
+
+        var results = await provider.SearchAsync(new MediaSearchContext(
+            "Adam Scott", MediaTypeName: "people",
+            KnownExternalIds: new Dictionary<string, string> { ["tmdb"] = "tmdb:36801" }));
+
+        var candidate = Assert.Single(results);
+        Assert.False(searchRequested);
+        Assert.Equal("person:36801", candidate.Metadata.ExternalId);
+        Assert.Equal("Adam Scott", candidate.Metadata.Title);
+        Assert.Equal(100, candidate.Score);
+    }
+
+    [Fact]
+    public async Task GetByIdAsync_Person_MapsDetailAndGalleryAsPromotablePosters()
+    {
+        var handler = new StubHandler(req => req.RequestUri!.PathAndQuery.Contains("/images")
+            ? PersonImagesResponse()
+            : PersonDetailResponse());
+        var provider = BuildProvider(handler);
+
+        var result = await provider.GetByIdAsync("person:36801");
+
+        Assert.Equal("Adam Scott", result.Title);
+        Assert.Equal("An actor.", result.Overview);
+        Assert.Equal("https://image.tmdb.org/t/p/w500/detail-profile.jpg", result.PosterUrl);
+        // Every profile in the gallery is re-tagged "poster" (not a new "profile"/"headshot"
+        // type) so it's promotable through the existing gallery/pin UI with no frontend change.
+        Assert.Equal(2, result.AdditionalImages.Count);
+        Assert.All(result.AdditionalImages, i => Assert.Equal("poster", i.Type));
+    }
+
+    [Fact]
+    public async Task GetByIdAsync_Person_ExtendedDataCarriesBirthAndDeathDateKeysVerbatim()
+    {
+        // Must match MetadataResolutionService.FieldMap's key names exactly
+        // ("birthDate"/"deathDate") -- Chronicle.Plugin.Wikipedia previously shipped this same
+        // data under "bornDate"/"diedDate", which nothing ever read.
+        var handler = new StubHandler(req => req.RequestUri!.PathAndQuery.Contains("/images")
+            ? PersonImagesResponse()
+            : PersonDetailResponse());
+        var provider = BuildProvider(handler);
+
+        var result = await provider.GetByIdAsync("person:36801");
+
+        Assert.True(result.ExtendedData.HasValue);
+        var ext = result.ExtendedData!.Value;
+        Assert.Equal("1973-04-03", ext.GetProperty("birthDate").GetString());
+        Assert.Equal(JsonValueKind.Null, ext.GetProperty("deathDate").ValueKind);
+    }
+
+    private static HttpResponseMessage PersonDetailResponse() =>
+        Json("""
+            {
+                "id": 36801, "name": "Adam Scott",
+                "biography": "An actor.",
+                "birthday": "1973-04-03", "deathday": null,
+                "profile_path": "/detail-profile.jpg"
+            }
+            """);
+
+    private static HttpResponseMessage PersonImagesResponse() =>
+        Json("""
+            {
+                "profiles": [
+                    { "file_path": "/gallery-1.jpg", "width": 1000, "height": 1500,
+                      "iso_639_1": null, "vote_average": 5.0, "vote_count": 2 },
+                    { "file_path": "/gallery-2.jpg", "width": 2000, "height": 3000,
+                      "iso_639_1": null, "vote_average": 9.5, "vote_count": 40 }
+                ]
+            }
+            """);
 
     // ── GetByIdAsync: collection artwork ─────────────────────────────────────
     // A collection's detail record carries exactly one poster_path, but TMDB holds dozens of
