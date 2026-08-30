@@ -168,15 +168,19 @@ internal record TmdbCredits(
 );
 
 internal record TmdbCastMember(
+    [property: JsonPropertyName("id")]         int Id,
     [property: JsonPropertyName("name")]       string Name,
     [property: JsonPropertyName("character")]  string? Character,
-    [property: JsonPropertyName("order")]      int Order
+    [property: JsonPropertyName("order")]      int Order,
+    [property: JsonPropertyName("profile_path")] string? ProfilePath
 );
 
 internal record TmdbCrewMember(
+    [property: JsonPropertyName("id")]         int Id,
     [property: JsonPropertyName("name")]       string Name,
     [property: JsonPropertyName("job")]        string? Job,
-    [property: JsonPropertyName("department")] string? Department
+    [property: JsonPropertyName("department")] string? Department,
+    [property: JsonPropertyName("profile_path")] string? ProfilePath
 );
 
 // ── Collection detail ──────────────────────────────────────────────────────────

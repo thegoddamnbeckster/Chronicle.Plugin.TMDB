@@ -501,9 +501,9 @@ public sealed class TmdbMetadataProvider : IMetadataProvider
 
         return type switch
         {
-            "tv"         => MapTv(await _client!.GetTvAsync(id, ct).ConfigureAwait(false)),
+            "tv"         => await GetTvWithImagesAsync(id, ct).ConfigureAwait(false),
             "collection" => await GetCollectionWithImagesAsync(int.Parse(id), ct).ConfigureAwait(false),
-            _            => MapMovie(await _client!.GetMovieAsync(id, ct).ConfigureAwait(false)),
+            _            => await GetMovieWithImagesAsync(id, ct).ConfigureAwait(false),
         };
     }
 
@@ -593,6 +593,46 @@ public sealed class TmdbMetadataProvider : IMetadataProvider
     }
 
     /// <summary>
+    /// Movie detail plus its full artwork list. PosterUrl/BackdropUrl still come from the detail
+    /// endpoint's own poster_path/backdrop_path (unlike collections, /movie/{id} reliably honors
+    /// the configured language for those two fields), but that endpoint only ever returns one of
+    /// each -- AdditionalImages needs the full gallery, which only /movie/{id}/images provides.
+    /// Best-effort like <see cref="GetCollectionWithImagesAsync"/>: a flaky or rate-limited images
+    /// call degrades to exactly today's behaviour (one poster, one backdrop) rather than failing
+    /// the whole lookup.
+    /// </summary>
+    private async Task<MediaMetadata> GetMovieWithImagesAsync(string id, CancellationToken ct)
+    {
+        var detail = await _client!.GetMovieAsync(id, ct).ConfigureAwait(false);
+
+        TmdbImageList? images = null;
+        try
+        {
+            images = await _client.GetMovieImagesAsync(id, ct).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) { throw; }
+        catch (HttpRequestException) { }
+
+        return MapMovie(detail, images);
+    }
+
+    /// <summary>TV-show equivalent of <see cref="GetMovieWithImagesAsync"/>.</summary>
+    private async Task<MediaMetadata> GetTvWithImagesAsync(string id, CancellationToken ct)
+    {
+        var detail = await _client!.GetTvAsync(id, ct).ConfigureAwait(false);
+
+        TmdbImageList? images = null;
+        try
+        {
+            images = await _client.GetTvImagesAsync(id, ct).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) { throw; }
+        catch (HttpRequestException) { }
+
+        return MapTv(detail, images);
+    }
+
+    /// <summary>
     /// Maps a TMDB collection to a <see cref="MediaMetadata"/> whose <c>Results</c> list
     /// contains one entry per collection part (movie). Used by MovieCollectionService to
     /// discover and create stub MediaItems for movies not yet in the user's library.
@@ -617,7 +657,7 @@ public sealed class TmdbMetadataProvider : IMetadataProvider
         // Every alternate TMDB holds, so a collection can have its artwork chosen the same way
         // any other media item can. Without this a collection has exactly one poster and the
         // Additional Images gallery has nothing to offer.
-        AdditionalImages = BuildCollectionImages(images),
+        AdditionalImages = BuildAdditionalImages(images),
         Results     = c.Parts?.Select(p => new MediaMetadata
         {
             ExternalId = $"movie:{p.Id}",
@@ -675,10 +715,10 @@ public sealed class TmdbMetadataProvider : IMetadataProvider
     /// <summary>
     /// Flattens TMDB's per-kind image lists into the generic AdditionalImage pool. Types are
     /// the lowercase slot vocabulary the frontend's TYPE_TO_SLOT table already understands
-    /// ("poster", "backdrop", "logo"), so collection artwork becomes promotable with no
-    /// frontend change.
+    /// ("poster", "backdrop", "logo"), so artwork from any /images gallery (collection, movie,
+    /// or TV show) becomes promotable with no frontend change.
     /// </summary>
-    private List<AdditionalImage> BuildCollectionImages(TmdbImageList? images)
+    private List<AdditionalImage> BuildAdditionalImages(TmdbImageList? images)
     {
         if (images is null) return [];
 
@@ -707,7 +747,7 @@ public sealed class TmdbMetadataProvider : IMetadataProvider
         }
     }
 
-    private MediaMetadata MapMovie(TmdbMovie m) => new()
+    private MediaMetadata MapMovie(TmdbMovie m, TmdbImageList? images = null) => new()
     {
         ExternalId      = $"movie:{m.Id}",
         Source          = "tmdb",
@@ -716,11 +756,22 @@ public sealed class TmdbMetadataProvider : IMetadataProvider
         Year            = ParseYear(m.ReleaseDate),
         PosterUrl       = m.PosterPath   is not null ? _client!.BuildImageUrl(m.PosterPath,   _posterSize)   : null,
         BackdropUrl     = m.BackdropPath is not null ? _client!.BuildImageUrl(m.BackdropPath, _backdropSize) : null,
+        // Only populated by GetMovieWithImagesAsync (the GetByIdAsync path) -- SearchAsync maps
+        // bare search results, which don't carry a gallery and don't need one.
+        AdditionalImages = BuildAdditionalImages(images),
         RuntimeMinutes  = m.Runtime,
         Rating          = m.VoteAverage,
         Genres          = m.Genres?.Select(g => g.Name).ToList() ?? [],
-        Cast            = m.Credits?.Cast?.OrderBy(c => c.Order).Select(c => new CastMember(c.Name, c.Character)).Take(10).ToList() ?? [],
-        Crew            = m.Credits?.Crew?.Select(c => new CrewMember(c.Name, c.Job)).ToList() ?? [],
+        Cast            = m.Credits?.Cast?.OrderBy(c => c.Order).Select(c => new CastMember(
+                              c.Name, c.Character,
+                              ExternalPersonId: $"tmdb:{c.Id}",
+                              ProfileImageUrl: c.ProfilePath is null ? null : _client!.BuildImageUrl(c.ProfilePath, "h632")))
+                              .Take(10).ToList() ?? [],
+        Crew            = m.Credits?.Crew?.Select(c => new CrewMember(
+                              c.Name, c.Job,
+                              ExternalPersonId: $"tmdb:{c.Id}",
+                              ProfileImageUrl: c.ProfilePath is null ? null : _client!.BuildImageUrl(c.ProfilePath, "h632")))
+                              .ToList() ?? [],
         ExtendedData    = System.Text.Json.JsonSerializer.SerializeToElement(new
         {
             popularity = m.Popularity,
@@ -775,7 +826,7 @@ public sealed class TmdbMetadataProvider : IMetadataProvider
         return best is null ? null : $"https://www.youtube.com/watch?v={best.Key}";
     }
 
-    private MediaMetadata MapTv(TmdbTv t) => new()
+    private MediaMetadata MapTv(TmdbTv t, TmdbImageList? images = null) => new()
     {
         ExternalId      = $"tv:{t.Id}",
         Source          = "tmdb",
@@ -784,11 +835,22 @@ public sealed class TmdbMetadataProvider : IMetadataProvider
         Year            = ParseYear(t.FirstAirDate),
         PosterUrl       = t.PosterPath   is not null ? _client!.BuildImageUrl(t.PosterPath,   _posterSize)   : null,
         BackdropUrl     = t.BackdropPath is not null ? _client!.BuildImageUrl(t.BackdropPath, _backdropSize) : null,
+        // Only populated by GetTvWithImagesAsync (the GetByIdAsync path) -- SearchAsync maps
+        // bare search results, which don't carry a gallery and don't need one.
+        AdditionalImages = BuildAdditionalImages(images),
         RuntimeMinutes  = t.EpisodeRunTime?.FirstOrDefault(),
         Rating          = t.VoteAverage,
         Genres          = t.Genres?.Select(g => g.Name).ToList() ?? [],
-        Cast            = t.Credits?.Cast?.OrderBy(c => c.Order).Select(c => new CastMember(c.Name, c.Character)).Take(10).ToList() ?? [],
-        Crew            = t.Credits?.Crew?.Select(c => new CrewMember(c.Name, c.Job)).ToList() ?? [],
+        Cast            = t.Credits?.Cast?.OrderBy(c => c.Order).Select(c => new CastMember(
+                              c.Name, c.Character,
+                              ExternalPersonId: $"tmdb:{c.Id}",
+                              ProfileImageUrl: c.ProfilePath is null ? null : _client!.BuildImageUrl(c.ProfilePath, "h632")))
+                              .Take(10).ToList() ?? [],
+        Crew            = t.Credits?.Crew?.Select(c => new CrewMember(
+                              c.Name, c.Job,
+                              ExternalPersonId: $"tmdb:{c.Id}",
+                              ProfileImageUrl: c.ProfilePath is null ? null : _client!.BuildImageUrl(c.ProfilePath, "h632")))
+                              .ToList() ?? [],
         ExtendedData    = System.Text.Json.JsonSerializer.SerializeToElement(new
         {
             popularity      = t.Popularity,

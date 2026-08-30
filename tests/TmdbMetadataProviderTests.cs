@@ -354,6 +354,175 @@ public class TmdbMetadataProviderTests
         Assert.Contains(expectedPathSegment, capturedPath);
     }
 
+    // ── GetByIdAsync: movie/TV artwork ───────────────────────────────────────
+    // A movie or show's detail record carries exactly one poster_path/backdrop_path, but TMDB
+    // holds a full gallery behind /movie/{id}/images and /tv/{id}/images -- 46 images for e.g.
+    // Batman: Knightfall Part 1 (TMDB id 1560520), of which only one poster and one backdrop
+    // ever reached Chronicle before this fix.
+
+    [Fact]
+    public async Task GetByIdAsync_Movie_FetchesFullImageList()
+    {
+        var handler = new StubHandler(MovieRoutes);
+        var provider = BuildProvider(handler);
+
+        var result = await provider.GetByIdAsync("movie:1560520");
+
+        Assert.Equal(4, result.AdditionalImages.Count);
+        Assert.Equal(2, result.AdditionalImages.Count(i => i.Type == "poster"));
+        Assert.Equal(1, result.AdditionalImages.Count(i => i.Type == "backdrop"));
+        Assert.Equal(1, result.AdditionalImages.Count(i => i.Type == "logo"));
+    }
+
+    [Fact]
+    public async Task GetByIdAsync_Movie_ImagesRequestSendsNoLanguageFilter()
+    {
+        string? imagesUrl = null;
+        var handler = new StubHandler(req =>
+        {
+            if (req.RequestUri!.PathAndQuery.Contains("/images"))
+                imagesUrl = req.RequestUri.PathAndQuery;
+            return MovieRoutes(req);
+        });
+        var provider = BuildProvider(handler);
+
+        await provider.GetByIdAsync("movie:1560520");
+
+        Assert.NotNull(imagesUrl);
+        Assert.DoesNotContain("language=", imagesUrl);
+    }
+
+    [Fact]
+    public async Task GetByIdAsync_Movie_StillCarriesDetailPosterAndBackdrop()
+    {
+        // PosterUrl/BackdropUrl must keep coming from the detail endpoint's own fields (which
+        // reliably honor the configured language for movies) -- the gallery only feeds
+        // AdditionalImages, it doesn't replace these.
+        var handler = new StubHandler(MovieRoutes);
+        var provider = BuildProvider(handler);
+
+        var result = await provider.GetByIdAsync("movie:1560520");
+
+        Assert.Equal("https://image.tmdb.org/t/p/w500/detail-poster.jpg", result.PosterUrl);
+        Assert.Equal("https://image.tmdb.org/t/p/w1280/detail-backdrop.jpg", result.BackdropUrl);
+    }
+
+    [Fact]
+    public async Task GetByIdAsync_Movie_ImagesFailure_StillReturnsDetail()
+    {
+        var handler = new StubHandler(req => req.RequestUri!.PathAndQuery.Contains("/images")
+            ? new HttpResponseMessage(HttpStatusCode.TooManyRequests)
+            : MovieDetailResponse());
+        var provider = BuildProvider(handler);
+
+        var result = await provider.GetByIdAsync("movie:1560520");
+
+        Assert.Empty(result.AdditionalImages);
+        Assert.Equal("Batman: Knightfall Part 1", result.Title);
+    }
+
+    [Fact]
+    public async Task GetByIdAsync_Movie_CastAndCrew_ThreadsPersonIdAndProfileImage()
+    {
+        // Per docs/plans/2026-08-28-people-section-design.md Section 4.1: TMDB's credits
+        // response already carries id/profile_path per cast/crew member -- this data must
+        // actually flow through into CastMember/CrewMember, not be silently dropped.
+        var handler = new StubHandler(req => req.RequestUri!.PathAndQuery.Contains("/images")
+            ? GalleryImagesResponse()
+            : Json("""
+                {
+                    "id": 1560520, "title": "Batman: Knightfall Part 1",
+                    "overview": "Batman faces Bane.",
+                    "release_date": "2025-01-01",
+                    "poster_path": "/detail-poster.jpg", "backdrop_path": "/detail-backdrop.jpg",
+                    "credits": {
+                        "cast": [
+                            { "id": 287, "name": "Val Kilmer", "character": "Batman", "order": 0,
+                              "profile_path": "/kilmer.jpg" },
+                            { "id": 999, "name": "No Photo Guy", "character": "Extra", "order": 1,
+                              "profile_path": null }
+                        ],
+                        "crew": [
+                            { "id": 42, "name": "Joel Schumacher", "job": "Director",
+                              "department": "Directing", "profile_path": "/schumacher.jpg" }
+                        ]
+                    }
+                }
+                """));
+        var provider = BuildProvider(handler);
+
+        var result = await provider.GetByIdAsync("movie:1560520");
+
+        var kilmer = Assert.Single(result.Cast, c => c.Name == "Val Kilmer");
+        Assert.Equal("tmdb:287", kilmer.ExternalPersonId);
+        Assert.Equal("https://image.tmdb.org/t/p/h632/kilmer.jpg", kilmer.ProfileImageUrl);
+        Assert.Equal("Batman", kilmer.Role);
+
+        var noPhoto = Assert.Single(result.Cast, c => c.Name == "No Photo Guy");
+        Assert.Equal("tmdb:999", noPhoto.ExternalPersonId);
+        Assert.Null(noPhoto.ProfileImageUrl);
+
+        var director = Assert.Single(result.Crew);
+        Assert.Equal("tmdb:42", director.ExternalPersonId);
+        Assert.Equal("https://image.tmdb.org/t/p/h632/schumacher.jpg", director.ProfileImageUrl);
+        Assert.Equal("Director", director.Job);
+    }
+
+    [Fact]
+    public async Task GetByIdAsync_Tv_FetchesFullImageList()
+    {
+        var handler = new StubHandler(TvRoutes);
+        var provider = BuildProvider(handler);
+
+        var result = await provider.GetByIdAsync("tv:1399");
+
+        Assert.Equal(4, result.AdditionalImages.Count);
+        Assert.Equal(2, result.AdditionalImages.Count(i => i.Type == "poster"));
+        Assert.Equal(1, result.AdditionalImages.Count(i => i.Type == "backdrop"));
+        Assert.Equal(1, result.AdditionalImages.Count(i => i.Type == "logo"));
+    }
+
+    [Fact]
+    public async Task GetByIdAsync_Tv_ImagesRequestSendsNoLanguageFilter()
+    {
+        string? imagesUrl = null;
+        var handler = new StubHandler(req =>
+        {
+            if (req.RequestUri!.PathAndQuery.Contains("/images"))
+                imagesUrl = req.RequestUri.PathAndQuery;
+            return TvRoutes(req);
+        });
+        var provider = BuildProvider(handler);
+
+        await provider.GetByIdAsync("tv:1399");
+
+        Assert.NotNull(imagesUrl);
+        Assert.DoesNotContain("language=", imagesUrl);
+    }
+
+    [Fact]
+    public async Task SearchAsync_DoesNotFetchImageGallery()
+    {
+        // Search results are a scored candidate list, not a full detail lookup -- they must not
+        // trigger a per-result /images call.
+        var imageRequests = new List<string>();
+        var handler = new StubHandler(req =>
+        {
+            if (req.RequestUri!.PathAndQuery.Contains("/images"))
+                imageRequests.Add(req.RequestUri.PathAndQuery);
+            return req.RequestUri!.PathAndQuery.Contains("/search/movie")
+                ? MovieSearchResponse(550, "Fight Club")
+                : EmptySearchResponse();
+        });
+        var provider = BuildProvider(handler);
+
+        var results = await provider.SearchAsync(new MediaSearchContext("Fight Club"));
+
+        Assert.NotEmpty(results);
+        Assert.Empty(imageRequests);
+        Assert.Empty(results[0].Metadata.AdditionalImages);
+    }
+
     // ── GetByIdAsync: collection artwork ─────────────────────────────────────
     // A collection's detail record carries exactly one poster_path, but TMDB holds dozens of
     // alternates behind /images (81 posters for the Die Hard collection). Without these the
@@ -599,6 +768,56 @@ public class TmdbMetadataProviderTests
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────────
+
+    private static HttpResponseMessage MovieRoutes(HttpRequestMessage req) =>
+        req.RequestUri!.PathAndQuery.Contains("/images")
+            ? GalleryImagesResponse()
+            : MovieDetailResponse();
+
+    private static HttpResponseMessage MovieDetailResponse() =>
+        Json("""
+            {
+                "id": 1560520, "title": "Batman: Knightfall Part 1",
+                "overview": "Batman faces Bane.",
+                "release_date": "2025-01-01",
+                "poster_path": "/detail-poster.jpg", "backdrop_path": "/detail-backdrop.jpg"
+            }
+            """);
+
+    private static HttpResponseMessage TvRoutes(HttpRequestMessage req) =>
+        req.RequestUri!.PathAndQuery.Contains("/images")
+            ? GalleryImagesResponse()
+            : TvDetailResponse();
+
+    private static HttpResponseMessage TvDetailResponse() =>
+        Json("""
+            {
+                "id": 1399, "name": "Game of Thrones",
+                "overview": "Noble families vie for control of Westeros.",
+                "first_air_date": "2011-04-17",
+                "poster_path": "/detail-poster.jpg", "backdrop_path": "/detail-backdrop.jpg"
+            }
+            """);
+
+    private static HttpResponseMessage GalleryImagesResponse() =>
+        Json("""
+            {
+                "posters": [
+                    { "file_path": "/worst.jpg", "width": 1000, "height": 1500,
+                      "iso_639_1": "pt", "vote_average": 1.0, "vote_count": 2 },
+                    { "file_path": "/best.jpg", "width": 2000, "height": 3000,
+                      "iso_639_1": null, "vote_average": 9.5, "vote_count": 40 }
+                ],
+                "backdrops": [
+                    { "file_path": "/bd.jpg", "width": 1920, "height": 1080,
+                      "iso_639_1": null, "vote_average": 5.0, "vote_count": 3 }
+                ],
+                "logos": [
+                    { "file_path": "/logo.png", "width": 800, "height": 310,
+                      "iso_639_1": "en", "vote_average": 5.0, "vote_count": 1 }
+                ]
+            }
+            """);
 
     private static HttpResponseMessage CollectionRoutes(HttpRequestMessage req) =>
         req.RequestUri!.PathAndQuery.Contains("/images")
