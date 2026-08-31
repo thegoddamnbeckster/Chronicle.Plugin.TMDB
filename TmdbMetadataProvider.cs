@@ -234,6 +234,46 @@ public sealed class TmdbMetadataProvider : IMetadataProvider
         new(@"\s*\((\d{4})\)\s*$",
             System.Text.RegularExpressions.RegexOptions.Compiled);
 
+    /// <summary>
+    /// Parses a string already confirmed to be Unicode decimal digits (e.g. a YearSuffixRe
+    /// capture group) into an integer, digit-by-digit via
+    /// CharUnicodeInfo.GetDecimalDigitValue. \d in .NET regex matches the whole Unicode Nd
+    /// category, not just ASCII 0-9 — a title carrying a fullwidth year suffix (e.g. Japanese
+    /// "（２０１５）") would make YearSuffixRe match "２０１５" and then int.Parse throw
+    /// FormatException on it, exactly the same crash class confirmed live (2026-08-30) in
+    /// Chronicle's own MetadataEnrichmentService for a fullwidth *volume number* — see
+    /// Chronicle.Core.Helpers.DigitParsingHelper there for the identical fix. Duplicated here
+    /// rather than referenced across the plugin boundary: this plugin only depends on the
+    /// Chronicle.Plugins contract project, never Chronicle.Core, same as every other Chronicle
+    /// plugin — see this repo's own manifest.json / independent versioning.
+    /// </summary>
+    internal static bool TryParseDigits(string digits, out int number)
+    {
+        number = 0;
+        if (string.IsNullOrEmpty(digits)) return false;
+
+        var accumulated = 0;
+        try
+        {
+            checked
+            {
+                foreach (var c in digits)
+                {
+                    var digit = System.Globalization.CharUnicodeInfo.GetDecimalDigitValue(c);
+                    if (digit < 0) return false; // not actually a decimal digit
+                    accumulated = accumulated * 10 + digit;
+                }
+            }
+        }
+        catch (OverflowException)
+        {
+            return false;
+        }
+
+        number = accumulated;
+        return true;
+    }
+
     /// <summary>Minimum score for a Stage 1a result to short-circuit Stage 1b (year-less search).</summary>
     private const int ExactMatchThreshold = 60;
 
@@ -310,7 +350,8 @@ public sealed class TmdbMetadataProvider : IMetadataProvider
             var yearMatch = YearSuffixRe.Match(title);
             if (yearMatch.Success)
             {
-                year ??= int.Parse(yearMatch.Groups[1].Value);
+                if (year is null && TryParseDigits(yearMatch.Groups[1].Value, out var parsedYear))
+                    year = parsedYear;
                 title = title[..yearMatch.Index].Trim();
             }
 

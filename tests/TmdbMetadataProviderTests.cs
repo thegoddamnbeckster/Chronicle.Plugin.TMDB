@@ -66,6 +66,35 @@ public class TmdbMetadataProviderTests
     }
 
     [Fact]
+    public async Task SearchAsync_Movie_WithFullwidthYearSuffix_StripsYearAndDoesNotThrow()
+    {
+        // Regex \d matches the whole Unicode Nd category, not just ASCII 0-9 -- a title with
+        // a fullwidth year suffix (e.g. from a Japanese source) used to make YearSuffixRe
+        // match "２０１５" and then int.Parse throw FormatException on it. Confirmed live
+        // (2026-08-30) as the same crash class hitting Chronicle's own MetadataEnrichmentService
+        // for a fullwidth volume number in a manga title.
+        string? capturedMovieUrl = null;
+        var handler = new StubHandler(req =>
+        {
+            if (req.RequestUri!.PathAndQuery.Contains("/search/movie"))
+            {
+                capturedMovieUrl = req.RequestUri.ToString();
+                return MovieSearchResponse(12101, "Alice in Borderland");
+            }
+            return EmptySearchResponse();
+        });
+        var provider = BuildProvider(handler);
+
+        // YearSuffixRe requires ASCII parens ("\(...\)") -- only the DIGITS inside are
+        // fullwidth here, which is the actual shape that crashed (a title carrying an ASCII
+        // "(YYYY)" suffix where YYYY itself uses fullwidth glyphs).
+        await provider.SearchAsync(new MediaSearchContext("Alice in Borderland (２０１５)"));
+
+        Assert.NotNull(capturedMovieUrl);
+        Assert.Contains("primary_release_year=2015", capturedMovieUrl);
+    }
+
+    [Fact]
     public async Task SearchAsync_Movie_WithYearSuffix_ReturnsCorrectExternalId()
     {
         var handler = new StubHandler(req => req.RequestUri!.PathAndQuery.Contains("/search/movie")

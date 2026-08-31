@@ -1,7 +1,7 @@
 {
   "plugin_id": "chronicle.plugin.tmdb",
   "name": "TMDB",
-  "version": "1.6.0",
+  "version": "1.6.2",
   "author": "Chronicle Contributors",
   "description": "Fetches movie and TV metadata from The Movie Database (TMDB). Requires a free TMDB API key.",
   "min_chronicle_version": "0.1.0",
@@ -10,6 +10,7 @@
   "iconUrl": "https://www.themoviedb.org/favicon.ico",
   "brandColorLight": "#01B4E4",
   "brandColorDark":  "#0d9ec9",
+  "max_enrichment_concurrency": 8,
   "background_tasks": [
     {
       "task_id":         "fetch-missing-metadata",

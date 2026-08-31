@@ -16,6 +16,7 @@ Fetches movie and TV metadata — titles, overviews, cast, crew, ratings, genres
 | `fanedits`  | title, overview, year, poster_url, backdrop_url, runtime_minutes, genres, cast, directors, rating |
 | `tv.1` (Seasons) | title, overview, year, poster_url, backdrop_url |
 | `tv.2` (Episodes) | title, overview, year, poster_url, runtime_minutes |
+| `people`   | title, overview, poster_url, birth_date, death_date (contributes to an existing person only — cross-referenced by ID, never a blind name search) |
 
 Movie collections are also supported via `GetByIdAsync` (looked up by TMDB collection id,
 never by search — TMDB has no search-by-collection endpoint): poster, backdrop, and logo
