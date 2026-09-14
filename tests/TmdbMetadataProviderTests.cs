@@ -618,6 +618,31 @@ public class TmdbMetadataProviderTests
     }
 
     [Fact]
+    public async Task GetByIdAsync_Person_BiographyHtmlEntitiesAreDecoded()
+    {
+        // Confirmed live (2026-09-14): TMDB's own person.biography field is frequently mirrored
+        // straight from Wikipedia (its own "Description above from the Wikipedia article ...,
+        // licensed under CC-BY-SA" attribution footer is the tell) and that upstream data can
+        // carry raw HTML entities -- "Heavy D &amp; the Boyz" displayed literally instead of
+        // "Heavy D & the Boyz".
+        var handler = new StubHandler(req => req.RequestUri!.PathAndQuery.Contains("/images")
+            ? PersonImagesResponse()
+            : Json("""
+                {
+                    "id": 36801, "name": "Heavy D",
+                    "biography": "Leader of Heavy D &amp; the Boyz.",
+                    "birthday": "1967-05-24", "deathday": "2011-11-08",
+                    "profile_path": "/detail-profile.jpg"
+                }
+                """));
+        var provider = BuildProvider(handler);
+
+        var result = await provider.GetByIdAsync("person:36801");
+
+        Assert.Equal("Leader of Heavy D & the Boyz.", result.Overview);
+    }
+
+    [Fact]
     public async Task GetByIdAsync_Person_ExtendedDataCarriesBirthAndDeathDateKeysVerbatim()
     {
         // Must match MetadataResolutionService.FieldMap's key names exactly

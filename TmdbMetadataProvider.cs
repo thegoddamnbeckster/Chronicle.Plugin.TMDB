@@ -1,3 +1,4 @@
+using System.Net;
 using Chronicle.Plugins;
 using Chronicle.Plugins.Models;
 
@@ -990,7 +991,15 @@ public sealed class TmdbMetadataProvider : IMetadataProvider
         ExternalId       = $"person:{p.Id}",
         Source           = "tmdb",
         Title            = p.Name,
-        Overview         = p.Biography,
+        // TMDB's own person.biography field is frequently mirrored straight from Wikipedia
+        // (its own attribution footer, "Description above from the Wikipedia article ...,
+        // licensed under CC-BY-SA", is a reliable tell) and that upstream data can carry raw
+        // HTML entities Chronicle never encoded and has no business displaying literally --
+        // confirmed live (2026-09-14): "Heavy D &amp; the Boyz" instead of "Heavy D & the Boyz".
+        // Every other TMDB text field (movie/show/season/episode overview) is plain prose TMDB
+        // itself authored and has never shown this -- scoped narrowly to Biography rather than
+        // decoding every field on a guess.
+        Overview         = p.Biography is null ? null : WebUtility.HtmlDecode(p.Biography),
         PosterUrl        = p.ProfilePath is not null ? _client!.BuildImageUrl(p.ProfilePath, _posterSize) : null,
         // Only populated by GetPersonWithImagesAsync (the GetByIdAsync/cross-reference
         // SearchAsync path) -- tagged "poster" (not a new "profile"/"headshot" type) so it
