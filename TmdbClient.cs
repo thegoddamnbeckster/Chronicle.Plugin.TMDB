@@ -151,6 +151,13 @@ internal sealed class TmdbClient
         return GetAsync<TmdbPersonImageList>(url, ct);
     }
 
+    /// <summary>Every movie and TV credit (cast and crew) TMDB holds for a person.</summary>
+    public Task<TmdbCombinedCredits> GetPersonCombinedCreditsAsync(string tmdbId, CancellationToken ct = default)
+    {
+        var url = $"{BaseUrl}/person/{tmdbId}/combined_credits?api_key={_apiKey}&language={_language}";
+        return GetAsync<TmdbCombinedCredits>(url, ct);
+    }
+
     // ── Images ────────────────────────────────────────────────────────────────
 
     /// <summary>Downloads raw image bytes from the TMDB image CDN.</summary>

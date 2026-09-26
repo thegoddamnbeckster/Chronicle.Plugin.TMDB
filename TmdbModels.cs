@@ -239,6 +239,26 @@ internal sealed class TmdbPerson
     [JsonPropertyName("profile_path")] public string? ProfilePath { get; set; }
 }
 
+/// <summary>Response of /person/{id}/combined_credits: one flat list of movie and TV credits.</summary>
+internal sealed class TmdbCombinedCredits
+{
+    [JsonPropertyName("cast")] public List<TmdbCombinedCredit>? Cast { get; set; }
+    [JsonPropertyName("crew")] public List<TmdbCombinedCredit>? Crew { get; set; }
+}
+
+internal sealed class TmdbCombinedCredit
+{
+    [JsonPropertyName("id")]             public int Id { get; set; }
+    [JsonPropertyName("media_type")]     public string? MediaType { get; set; }
+    [JsonPropertyName("title")]          public string? Title { get; set; }
+    [JsonPropertyName("name")]           public string? Name { get; set; }
+    [JsonPropertyName("release_date")]   public string? ReleaseDate { get; set; }
+    [JsonPropertyName("first_air_date")] public string? FirstAirDate { get; set; }
+    [JsonPropertyName("poster_path")]    public string? PosterPath { get; set; }
+    [JsonPropertyName("character")]      public string? Character { get; set; }
+    [JsonPropertyName("job")]            public string? Job { get; set; }
+}
+
 /// <summary>Response of /person/{id}/images -- every headshot TMDB holds, not just the one
 /// profile_path the detail endpoint picks. Same "full unfiltered gallery" rationale as
 /// TmdbImageList: TMDB doesn't reliably pick the best/most current photo as the primary one

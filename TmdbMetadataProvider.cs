@@ -529,6 +529,46 @@ public sealed class TmdbMetadataProvider : IMetadataProvider
     // ── IMetadataProvider: get by ID ──────────────────────────────────────────
 
     /// <summary>
+    /// Every movie/TV credit TMDB holds for a person (acting as "Actor", crew by job), for the person
+    /// page's "show every credit" toggle. <paramref name="personExternalId"/> is "person:{id}" (or a bare id).
+    /// </summary>
+    public async Task<IReadOnlyList<ProviderPersonCredit>> GetPersonCreditsAsync(
+        string personExternalId, CancellationToken ct = default)
+    {
+        EnsureConfigured();
+        var id = personExternalId[(personExternalId.LastIndexOf(':') + 1)..];
+        var credits = await _client!.GetPersonCombinedCreditsAsync(id, ct).ConfigureAwait(false);
+        return MapPersonCredits(credits, _client.BuildImageUrl);
+    }
+
+    internal static IReadOnlyList<ProviderPersonCredit> MapPersonCredits(
+        TmdbCombinedCredits credits, Func<string, string, string> buildImageUrl)
+    {
+        var result = new List<ProviderPersonCredit>();
+
+        void Add(TmdbCombinedCredit c, string role, string? character)
+        {
+            if (c.MediaType is not ("movie" or "tv")) return;
+            var title = c.MediaType == "movie" ? c.Title : c.Name;
+            if (string.IsNullOrWhiteSpace(title)) return;
+            var date = c.MediaType == "movie" ? c.ReleaseDate : c.FirstAirDate;
+            int? year = date is { Length: >= 4 } && int.TryParse(date.AsSpan(0, 4), out var y) ? y : null;
+            var externalId = $"{c.MediaType}:{c.Id}";
+            // TMDB lists a person once per role on a title; keep one entry per (title, role).
+            if (result.Any(r => r.ExternalId == externalId && r.Role == role)) return;
+            result.Add(new ProviderPersonCredit(
+                externalId, c.MediaType, title, year,
+                c.PosterPath is null ? null : buildImageUrl(c.PosterPath, "w342"),
+                role, string.IsNullOrWhiteSpace(character) ? null : character));
+        }
+
+        foreach (var c in credits.Cast ?? []) Add(c, "Actor", c.Character);
+        foreach (var c in credits.Crew ?? [])
+            if (!string.IsNullOrWhiteSpace(c.Job)) Add(c, c.Job!, null);
+        return result;
+    }
+
+    /// <summary>
     /// Fetches full details for a specific item.
     /// The external ID format is "{type}:{tmdbId}", e.g. "movie:550" or "tv:1399".
     /// </summary>
