@@ -884,7 +884,7 @@ public sealed class TmdbMetadataProvider : IMetadataProvider
                               c.Name, c.Character,
                               ExternalPersonId: $"tmdb:{c.Id}",
                               ProfileImageUrl: c.ProfilePath is null ? null : _client!.BuildImageUrl(c.ProfilePath, "h632")))
-                              .Take(10).ToList() ?? [],
+                              .ToList() ?? [],
         Crew            = m.Credits?.Crew?.Select(c => new CrewMember(
                               c.Name, c.Job,
                               ExternalPersonId: $"tmdb:{c.Id}",
@@ -963,7 +963,7 @@ public sealed class TmdbMetadataProvider : IMetadataProvider
                               c.Name, c.Character,
                               ExternalPersonId: $"tmdb:{c.Id}",
                               ProfileImageUrl: c.ProfilePath is null ? null : _client!.BuildImageUrl(c.ProfilePath, "h632")))
-                              .Take(10).ToList() ?? [],
+                              .ToList() ?? [],
         Crew            = t.Credits?.Crew?.Select(c => new CrewMember(
                               c.Name, c.Job,
                               ExternalPersonId: $"tmdb:{c.Id}",
@@ -1070,6 +1070,8 @@ public sealed class TmdbMetadataProvider : IMetadataProvider
             seasonNumber = season.SeasonNumber,
             tmdbId       = season.Id,
             episodeCount = season.Episodes?.Count,
+            // The full premiere date -- Year alone throws away what a media player shows per season.
+            air_date     = season.AirDate,
         }),
     };
 
@@ -1090,6 +1092,10 @@ public sealed class TmdbMetadataProvider : IMetadataProvider
             episodeNumber = episode.EpisodeNumber,
             seasonNumber  = episode.SeasonNumber,
             tmdbId        = episode.Id,
+            // The full air date, not just its year (Year above): Kodi shows an episode's air date and
+            // Chronicle's scraper API reads it from here ("air_date"). Dropping it left every
+            // episode on a device with no air date at all (confirmed live 2026-09-26: 3,851 of 3,851).
+            air_date      = episode.AirDate,
         }),
     };
 
