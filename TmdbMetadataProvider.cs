@@ -557,7 +557,7 @@ public sealed class TmdbMetadataProvider : IMetadataProvider
             // TMDB lists a person once per role on a title; keep one entry per (title, role).
             if (result.Any(r => r.ExternalId == externalId && r.Role == role)) return;
             result.Add(new ProviderPersonCredit(
-                externalId, c.MediaType, title, year,
+                "tmdb", externalId, c.MediaType, title, year,
                 c.PosterPath is null ? null : buildImageUrl(c.PosterPath, "w342"),
                 role, string.IsNullOrWhiteSpace(character) ? null : character));
         }

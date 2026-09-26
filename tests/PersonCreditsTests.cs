@@ -22,6 +22,7 @@ public class PersonCreditsTests
         var result = TmdbMetadataProvider.MapPersonCredits(credits, Img);
 
         Assert.Equal(3, result.Count);
+        Assert.All(result, r => Assert.Equal("tmdb", r.Source));
         Assert.Contains(result, r => r.ExternalId == "movie:603" && r.Role == "Actor" && r.Year == 1999 && r.CharacterName == "Neo" && r.PosterUrl == "img/w342/m.jpg");
         Assert.Contains(result, r => r.ExternalId == "tv:1399" && r.Role == "Actor" && r.Year == 2011 && r.CharacterName is null);
         Assert.Contains(result, r => r.ExternalId == "movie:604" && r.Role == "Producer");
