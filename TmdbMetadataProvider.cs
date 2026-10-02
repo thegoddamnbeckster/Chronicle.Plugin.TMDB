@@ -63,10 +63,20 @@ public sealed class TmdbMetadataProvider : IMetadataProvider
             SupportedFields = ["title", "overview", "year", "poster_url", "backdrop_url",
                                "runtime_minutes", "genres", "cast", "crew", "rating"],
         },
-        // Fan Edits are identified exclusively by the FanEdit plugin; TMDB contributes
-        // movie metadata via cross-ref seeding after the FanEdit plugin locates the item.
-        // Declaring "fanedits" here caused TMDB to appear in the Add Media Fan Edits search,
-        // returning generic movie results that are not fan edits.
+        // Fan Edits are identified exclusively by the FanEdit plugin; TMDB contributes movie
+        // metadata after the FanEdit plugin locates the item. EnrichOnly keeps TMDB out of the
+        // Add Media / file-scan search for the type -- declaring it plainly made TMDB appear in the
+        // Add Media Fan Edits search returning generic movie results that are not fan edits -- while
+        // still letting it enrich fan edits, keep its ids on them, and appear in their Metadata
+        // Assignment. No DisplayName: the FanEdit plugin owns (registers) the type, as with "movie".
+        new MediaTypeSupport
+        {
+            MediaTypeName   = "fanedits",
+            EnrichOnly      = true,
+            DefaultPriority = 10,
+            SupportedFields = ["title", "overview", "year", "poster_url", "backdrop_url",
+                               "runtime_minutes", "genres", "cast", "crew", "rating", "tags"],
+        },
         new MediaTypeSupport
         {
             MediaTypeName    = "tv",

@@ -14,6 +14,29 @@ namespace Chronicle.Plugin.TMDB.Tests;
 /// </summary>
 public class TmdbMetadataProviderTests
 {
+    // ── Declared media types ──────────────────────────────────────────────────
+
+    [Fact]
+    public void GetSupportedMediaTypes_FanEdits_IsEnrichOnly_AndDoesNotRegisterTheType()
+    {
+        var fanEdits = Assert.Single(
+            new TmdbMetadataProvider().GetSupportedMediaTypes(), t => t.MediaTypeName == "fanedits");
+
+        // EnrichOnly: keeps TMDB out of the Add Media / file-scan Fan Edits search (the June 2026
+        // regression) while still letting it enrich them and keep its ids on them.
+        Assert.True(fanEdits.EnrichOnly);
+        // No DisplayName: the FanEdit plugin owns the type; TMDB must not register it.
+        Assert.Equal(string.Empty, fanEdits.DisplayName);
+    }
+
+    [Fact]
+    public void GetSupportedMediaTypes_OnlyFanEditsIsEnrichOnly()
+    {
+        var enrichOnly = new TmdbMetadataProvider().GetSupportedMediaTypes()
+            .Where(t => t.EnrichOnly).Select(t => t.MediaTypeName);
+        Assert.Equal(["fanedits"], enrichOnly);
+    }
+
     // ── SearchAsync: movie ────────────────────────────────────────────────────
 
     [Fact]
