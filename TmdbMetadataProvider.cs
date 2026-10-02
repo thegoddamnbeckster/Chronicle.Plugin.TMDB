@@ -487,7 +487,7 @@ public sealed class TmdbMetadataProvider : IMetadataProvider
             }
         }
 
-        // Precise-name tiebreaker: use the exact title from file metadata (NFO <title>) when
+        // Precise-name tiebreaker: use the exact title from a reliable source (MediaSearchContext.PreciseName) when
         // available.  Unlike the normalised comparison above, this keeps punctuation so that
         // "What If...?" stays distinct from "What If".  Only applied when PreciseName is
         // explicitly set — never falls back to the folder/item name, which would favour the
