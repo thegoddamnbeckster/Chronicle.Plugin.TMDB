@@ -8,11 +8,24 @@ namespace Chronicle.Plugin.TMDB;
 /// Chronicle metadata provider for The Movie Database (TMDB).
 /// Supports the "movie" and "tv" media types.
 /// </summary>
-public sealed class TmdbMetadataProvider : IMetadataProvider
+public sealed class TmdbMetadataProvider : IMetadataProvider, IExternalIdPolicyProvider
 {
     // ── IMetadataProvider identity ────────────────────────────────────────────
 
     public string PluginId => "chronicle.plugin.tmdb";
+
+    /// <summary>
+    /// TMDB dispatches GetByIdAsync on an entity prefix ("person:N"), but every credit this plugin writes names a person
+    /// "tmdb:N"; Chronicle must file both as "tmdb:N" or the same person gets two records. A TMDB id found in another
+    /// provider's cross-reference block is a bare number: "movie:N" for a movie, "tv:N" otherwise.
+    /// </summary>
+    public ExternalIdPolicy GetExternalIdPolicy() => new()
+    {
+        Source = "tmdb",
+        StoredPrefixRewrites = { ["person:"] = "tmdb:" },
+        CrossRefFormats = { ["movie"] = "movie:{id}", ["default"] = "tv:{id}" },
+        CrossRefValueKinds = ["number"],
+    };
     public string Name     => "TMDB";
     public string Version  => "1.0.0";
     public string Author   => "Chronicle Contributors";
