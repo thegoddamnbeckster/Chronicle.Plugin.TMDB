@@ -25,6 +25,24 @@ public sealed class TmdbMetadataProvider : IMetadataProvider, IExternalIdPolicyP
         StoredPrefixRewrites = { ["person:"] = "tmdb:" },
         CrossRefFormats = { ["movie"] = "movie:{id}", ["default"] = "tv:{id}" },
         CrossRefValueKinds = ["number"],
+        FamilyIdPatterns = { ["movie"] = "^movie:" },
+        PositionInIdPattern = @"season:(?<season>\d+)/episode:(?<episode>\d+)",
+        // A season's id is its show's plus "/season:N", an episode's that plus "/episode:M".
+        ChildIds =
+        [
+            new() { RootIdPattern = @"^tv:(?<root>\d+)$", Depth = 1, Template = "tv:{root}/season:{n}" },
+            new() { RootIdPattern = @"^tv:(?<root>\d+)$", Depth = 2, Template = "tv:{root}/season:{parentN}/episode:{n}" },
+        ],
+        // Which kind of item each shape of id can sit on: a film's id belongs on a film (or, inside a collection, a film in it),
+        // a show's on a show, a season's and an episode's below it. A person, collection or other id is trusted as it is.
+        IdShapes =
+        [
+            new() { Pattern = @"^movie:\d+$", Depths = [0], ItemFamilies = ["movie"] },
+            new() { Pattern = @"^movie:\d+$", Depths = [1], ParentFamilies = ["movie"] },
+            new() { Pattern = @"^tv:\d+$", Depths = [0], ItemFamilies = ["tv"] },
+            new() { Pattern = @"^tv:\d+/season:\d+$", Depths = [1] },
+            new() { Pattern = @"^tv:\d+/season:\d+/episode:\d+$", Depths = [2] },
+        ],
     };
     public string Name     => "TMDB";
     public string Version  => "1.0.0";
