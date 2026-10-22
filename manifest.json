@@ -6,6 +6,14 @@
   "description": "Fetches movie and TV metadata from The Movie Database (TMDB). Requires a free TMDB API key.",
   "min_chronicle_version": "0.1.0",
   "entry_type": "Chronicle.Plugin.TMDB.TmdbMetadataProvider",
+  "sourceUrls": [
+    { "match": "^tv:(\\d+)/season:(\\d+)/episode:(\\d+)", "url": "https://www.themoviedb.org/tv/$1/season/$2/episode/$3" },
+    { "match": "^tv:(\\d+)/season:(\\d+)", "url": "https://www.themoviedb.org/tv/$1/season/$2" },
+    { "match": "^movie:(\\d+)", "url": "https://www.themoviedb.org/movie/$1" },
+    { "match": "^tv:(\\d+)", "url": "https://www.themoviedb.org/tv/$1" },
+    { "match": "^person:(\\d+)", "url": "https://www.themoviedb.org/person/$1" },
+    { "match": "^collection:(\\d+)", "url": "https://www.themoviedb.org/collection/$1" }
+  ],
   "fixMatchHint": "Enter a TMDB URL or typed ID. For movies: https://www.themoviedb.org/movie/550 or movie:550. For TV shows: https://www.themoviedb.org/tv/1399 or tv:1399. For episodes: https://www.themoviedb.org/tv/1399/season/1/episode/3 or tv:1399/season:1/episode:3.",
   "iconUrl": "https://www.themoviedb.org/favicon.ico",
   "brandColorLight": "#01B4E4",
