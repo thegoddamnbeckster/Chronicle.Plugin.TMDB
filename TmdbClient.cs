@@ -161,12 +161,8 @@ internal sealed class TmdbClient
     // ── Images ────────────────────────────────────────────────────────────────
 
     /// <summary>Downloads raw image bytes from the TMDB image CDN.</summary>
-    public async Task<byte[]> GetImageAsync(string url, CancellationToken ct = default)
-    {
-        var response = await _http.GetAsync(url, ct).ConfigureAwait(false);
-        response.EnsureSuccessStatusCode();
-        return await response.Content.ReadAsByteArrayAsync(ct).ConfigureAwait(false);
-    }
+    public Task<byte[]> GetImageAsync(string url, CancellationToken ct = default)
+        => throw new NotSupportedException("Images are loaded by the browser straight from the address in the metadata; this plugin has nothing to fetch.");
 
     /// <summary>Builds a full TMDB image URL from a poster/backdrop path.</summary>
     public string BuildImageUrl(string path, string size = "w500") =>

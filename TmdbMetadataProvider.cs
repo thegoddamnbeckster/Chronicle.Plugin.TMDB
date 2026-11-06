@@ -45,7 +45,7 @@ public sealed class TmdbMetadataProvider : IMetadataProvider, IExternalIdPolicyP
         ],
     };
     public string Name     => "TMDB";
-    public string Version  => "1.0.0";
+    public string Version  => System.Reflection.CustomAttributeExtensions.GetCustomAttribute<System.Reflection.AssemblyInformationalVersionAttribute>(typeof(TmdbMetadataProvider).Assembly)?.InformationalVersion.Split('+')[0] ?? "1.9.1";
     public string Author   => "Chronicle Contributors";
 
     // ── Settings keys ─────────────────────────────────────────────────────────
@@ -730,10 +730,7 @@ public sealed class TmdbMetadataProvider : IMetadataProvider, IExternalIdPolicyP
     // ── IMetadataProvider: image ──────────────────────────────────────────────
 
     public Task<byte[]> GetImageAsync(string url, CancellationToken ct = default)
-    {
-        EnsureConfigured();
-        return _client!.GetImageAsync(url, ct);
-    }
+        => throw new NotSupportedException("Images are loaded by the browser straight from the address in the metadata; this plugin has nothing to fetch.");
 
     // ── IMetadataProvider: health ─────────────────────────────────────────────
 
