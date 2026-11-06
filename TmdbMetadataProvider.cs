@@ -10,6 +10,7 @@ namespace Chronicle.Plugin.TMDB;
 /// </summary>
 public sealed class TmdbMetadataProvider : IMetadataProvider, IExternalIdPolicyProvider
 {
+    private static readonly Serilog.ILogger _imgLog = Serilog.Log.ForContext<TmdbMetadataProvider>();
     // ── IMetadataProvider identity ────────────────────────────────────────────
 
     public string PluginId => "chronicle.plugin.tmdb";
@@ -179,7 +180,7 @@ public sealed class TmdbMetadataProvider : IMetadataProvider, IExternalIdPolicyP
             {
                 Key         = KeyApiKey,
                 Label       = "TMDB API Key",
-                Description = "Your v3 API key from https://www.themoviedb.org/settings/api",
+                Description = "The short 'API Key' (v3 auth) from https://www.themoviedb.org/settings/api, about 32 letters and digits. NOT the long 'API Read Access Token' beneath it, which will be rejected.",
                 Type        = SettingType.Password,
                 Required    = true,
             },
@@ -253,7 +254,8 @@ public sealed class TmdbMetadataProvider : IMetadataProvider, IExternalIdPolicyP
         if (string.IsNullOrWhiteSpace(apiKey))
             throw new InvalidOperationException("TMDB plugin requires 'api_key' to be configured.");
 
-        var http = new HttpClient();
+        var http = new HttpClient { Timeout = TimeSpan.FromSeconds(20) };
+        http.DefaultRequestHeaders.TryAddWithoutValidation("User-Agent", $"Chronicle-TMDB/{Version}");
         _client = new TmdbClient(
             http,
             apiKey,
@@ -761,7 +763,7 @@ public sealed class TmdbMetadataProvider : IMetadataProvider, IExternalIdPolicyP
             images = await _client.GetCollectionImagesAsync(collectionId, ct).ConfigureAwait(false);
         }
         catch (OperationCanceledException) { throw; }
-        catch (HttpRequestException) { }
+        catch (HttpRequestException ex) { _imgLog.Warning("TMDB: extra artwork unavailable ({Reason}); carrying on with what the main record gave", ex.Message); }
 
         return MapCollection(detail, images);
     }
@@ -783,7 +785,7 @@ public sealed class TmdbMetadataProvider : IMetadataProvider, IExternalIdPolicyP
             images = await _client.GetPersonImagesAsync(id, ct).ConfigureAwait(false);
         }
         catch (OperationCanceledException) { throw; }
-        catch (HttpRequestException) { }
+        catch (HttpRequestException ex) { _imgLog.Warning("TMDB: extra artwork unavailable ({Reason}); carrying on with what the main record gave", ex.Message); }
 
         return MapPerson(detail, images);
     }
@@ -807,7 +809,7 @@ public sealed class TmdbMetadataProvider : IMetadataProvider, IExternalIdPolicyP
             images = await _client.GetMovieImagesAsync(id, ct).ConfigureAwait(false);
         }
         catch (OperationCanceledException) { throw; }
-        catch (HttpRequestException) { }
+        catch (HttpRequestException ex) { _imgLog.Warning("TMDB: extra artwork unavailable ({Reason}); carrying on with what the main record gave", ex.Message); }
 
         return MapMovie(detail, images);
     }
@@ -823,7 +825,7 @@ public sealed class TmdbMetadataProvider : IMetadataProvider, IExternalIdPolicyP
             images = await _client.GetTvImagesAsync(id, ct).ConfigureAwait(false);
         }
         catch (OperationCanceledException) { throw; }
-        catch (HttpRequestException) { }
+        catch (HttpRequestException ex) { _imgLog.Warning("TMDB: extra artwork unavailable ({Reason}); carrying on with what the main record gave", ex.Message); }
 
         return MapTv(detail, images);
     }
