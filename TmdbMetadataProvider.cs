@@ -1239,8 +1239,9 @@ public sealed class TmdbMetadataProvider : IMetadataProvider, IExternalIdPolicyP
     ///      https://www.themoviedb.org/tv/3534/season/1/episode/23               → tv:3534/season:1/episode:23
     ///      https://www.themoviedb.org/tv/3534/season/1                          → tv:3534/season:1
     ///      https://www.themoviedb.org/collection/8864-final-destination-collection → collection:8864
+    ///      https://www.themoviedb.org/person/8265-john-michael-higgins              → person:8265
     /// </summary>
-    private static string NormalizeTmdbUrl(string url)
+    internal static string NormalizeTmdbUrl(string url)
     {
         if (!Uri.TryCreate(url, UriKind.Absolute, out var uri))
             throw new ArgumentException($"Invalid TMDB URL: '{url}'");
@@ -1256,6 +1257,7 @@ public sealed class TmdbMetadataProvider : IMetadataProvider, IExternalIdPolicyP
         //   /tv/3534-some-slug/season/1/episode/23
         //   /tv/3534-some-slug/season/1
         //   /collection/8864-some-slug
+        //   /person/8265-some-slug
         var segments = uri.AbsolutePath.Trim('/').Split('/');
         if (segments.Length < 2)
             throw new ArgumentException(
@@ -1263,9 +1265,11 @@ public sealed class TmdbMetadataProvider : IMetadataProvider, IExternalIdPolicyP
                 "Expected /movie/{{id}} or /tv/{{id}}.");
 
         var type = segments[0].ToLowerInvariant();
-        if (type is not "tv" and not "movie" and not "collection")
+        // A person is accepted too: GetByIdAsync already dispatches "person:{id}" (see below), so a person page link is
+        // as good an id as a movie one. Without this, Fix Match on a person always failed on a /person/ link.
+        if (type is not "tv" and not "movie" and not "collection" and not "person")
             throw new ArgumentException(
-                $"Unrecognised TMDB content type '{type}' in URL: '{url}'. Expected /movie/, /tv/, or /collection/.");
+                $"Unrecognised TMDB content type '{type}' in URL: '{url}'. Expected /movie/, /tv/, /collection/, or /person/.");
 
         // The segment may be "127839-some-slug" — extract the leading numeric portion.
         var idPart = segments[1].Split('-')[0];
