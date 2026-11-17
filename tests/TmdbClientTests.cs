@@ -52,7 +52,9 @@ public class TmdbClientTests
 
         var client = new TmdbClient(new HttpClient(handler), apiKey: "test_key", language: "en-US", includeAdult: false);
 
-        await Assert.ThrowsAsync<HttpRequestException>(() => client.SearchMoviesAsync("Fight Club"));
+        var ex = await Assert.ThrowsAsync<HttpRequestException>(() => client.SearchMoviesAsync("Fight Club"));
+        Assert.Equal(HttpStatusCode.TooManyRequests, ex.StatusCode);
+        Assert.Equal(TimeSpan.FromMilliseconds(1), ex.Data["RetryAfter"]);   // what TMDB asked for, so Chronicle's queue holds the item that long
 
         // Bounded to exactly one retry (2 total calls) — not an unbounded loop that would
         // keep hammering TMDB, and not zero retries either (that was the pre-fix behavior).

@@ -213,6 +213,12 @@ internal sealed class TmdbClient
 
         response.Dispose();
         await Task.Delay(wait, ct).ConfigureAwait(false);
-        return await _http.GetAsync(url, ct).ConfigureAwait(false);
+        var again = await _http.GetAsync(url, ct).ConfigureAwait(false);
+        if (again.StatusCode != HttpStatusCode.TooManyRequests) return again;
+
+        // Still limited after the one short wait: a pause, with what TMDB asked for, so the queue holds the item and carries on.
+        again.Dispose();
+        throw new HttpRequestException("TMDB is rate limiting requests", null, HttpStatusCode.TooManyRequests)
+            { Data = { ["RetryAfter"] = retryAfter } };
     }
 }
