@@ -1,7 +1,7 @@
 {
   "plugin_id": "chronicle.plugin.tmdb",
   "name": "TMDB",
-  "version": "1.10.0",
+  "version": "1.11.0",
   "author": "Chronicle Contributors",
   "description": "Fetches movie and TV metadata from The Movie Database (TMDB). Requires a free TMDB API key.",
   "min_chronicle_version": "0.1.0",
@@ -41,7 +41,15 @@
       "display_name": "TMDB",
       "stored_scale": 10,
       "scale": 100,
-      "display": "percent"
+      "display": "percent",
+      "look": "ring",
+      "label": "User Score",
+      "font_family": "Source Sans 3",
+      "thresholds": [
+        { "min": 0,  "color": "#DB2360", "track": "#571435" },
+        { "min": 40, "color": "#D2D531", "track": "#423D0F" },
+        { "min": 70, "color": "#21D07A", "track": "#204529" }
+      ]
     }
   ]
 }
